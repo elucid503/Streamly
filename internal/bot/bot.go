@@ -49,12 +49,12 @@ func (b *Bot) registerCommands() error {
 
 	commands := []*discordgo.ApplicationCommand{
 		{Name: "stream", Description: "Stream a movie, TV show, or live TV channel in your call.", Options: []*discordgo.ApplicationCommandOption{
-			{Type: discordgo.ApplicationCommandOptionString, Name: "title", Description: "Search for something to watch.", Required: true, Autocomplete: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "title", Description: "Search by movie name, show name, or TV channel.", Required: true, Autocomplete: true},
 		}},
 		{Name: "pause", Description: "Pause the active stream in your call."},
 		{Name: "resume", Description: "Resume the paused stream in your call."},
 		{Name: "stop", Description: "Stop the active stream in your call."},
-		{Name: "stats", Description: "Show live stats for the active stream."},
+		{Name: "stats", Description: "Show stats for the active stream in your call."},
 	}
 
 	for _, command := range commands {
