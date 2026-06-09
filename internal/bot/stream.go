@@ -434,11 +434,6 @@ func liveStreamingEmbed(details media.TitleDetails, channel tvapi.Channel, voice
 	})
 
 	region := channel.Country.Name
-
-	if channel.Country.Flag != "" {
-		region = strings.TrimSpace(channel.Country.Flag + " " + region)
-	}
-
 	if region != "" {
 		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
 			Name: "Region", Value: region, Inline: true,

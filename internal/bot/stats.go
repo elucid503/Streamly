@@ -34,7 +34,7 @@ func (b *Bot) handleStats(s *discordgo.Session, i *discordgo.InteractionCreate) 
 			{Name: "Uptime", Value: formatDuration(stats.UptimeMs), Inline: true},
 			{Name: "Channel", Value: channelLabel(stats.ChannelID), Inline: true},
 			{Name: "Position", Value: positionField, Inline: true},
-			{Name: "Memory Used", Value: formatBytes(memoryRSS()), Inline: true},
+			{Name: "Memory", Value: formatBytes(memoryRSS()), Inline: true},
 			{Name: "Quality", Value: fallbackCaption(stats.QualityLabel, "Auto"), Inline: true},
 		},
 	}
