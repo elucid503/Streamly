@@ -14,6 +14,7 @@ import (
 	"streamly/internal/febapi"
 	"streamly/internal/media"
 	"streamly/internal/pool"
+	"streamly/internal/tvapi"
 )
 
 // streamMedia tracks per-session quality picks for URL re-resolution.
@@ -24,6 +25,8 @@ type streamTarget struct {
 	FID      int
 	Target   int
 	Label    string
+	Live     bool
+	DaddyID  string
 }
 
 func (b *Bot) onAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -38,13 +41,34 @@ func (b *Bot) onAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreat
 
 	var choices []*discordgo.ApplicationCommandOptionChoice
 
+	tvLimit := 5
+
 	if query != "" {
+		tvLimit = maxOptions
+	}
+
+	tvResults, tvErr := b.Resolver.SearchTV(query, tvLimit)
+
+	if tvErr == nil {
+
+		for _, channel := range tvResults {
+			choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
+				Name:  truncate(media.TVAutocompleteLabel(channel), 100),
+				Value: media.TVSelectionValue(channel.DaddyID),
+			})
+		}
+
+	}
+
+	remaining := maxOptions - len(choices)
+
+	if query != "" && remaining > 0 {
 
 		results, err := b.Resolver.Search(query)
 
 		if err == nil {
 
-			for _, result := range results[:minInt(len(results), maxOptions)] {
+			for _, result := range results[:minInt(len(results), remaining)] {
 				choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
 					Name:  autocompleteLabel(result),
 					Value: fmt.Sprintf("%d:%d", result.BoxType, result.ID),
@@ -64,6 +88,18 @@ func (b *Bot) handleStream(s *discordgo.Session, i *discordgo.InteractionCreate)
 	_ = deferReply(s, i)
 
 	title := optionString(i, "title")
+
+	if live, err := b.resolveLiveTV(title); live != nil {
+
+		if err != nil {
+			editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("Couldn't resolve that live TV channel.")})
+			return
+		}
+
+		b.startLiveStream(s, i, *live)
+		return
+
+	}
 
 	selection, err := b.Resolver.ResolveSelection(title)
 
@@ -276,7 +312,7 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 
 			delete(streamMedia, session.ID)
 
-			embeds, components := endedCard(i.Message.Embeds, closeLabel(reason))
+			embeds, components := endedCard(i.Message.Embeds, closeLabel(reason), false)
 			_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Embeds: &embeds, Components: &components})
 		},
 	})
@@ -290,8 +326,130 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 	}
 
 	embed := streamingEmbed(details, channel.ID, episode)
-	components := controlRow(session.ID, false)
+	components := controlRow(session.ID, false, false)
 	editMessage(s, i, &discordgo.WebhookEdit{Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}), Components: ptrComponents(components)})
+
+}
+
+func (b *Bot) resolveLiveTV(title string) (*tvapi.Channel, error) {
+
+	title = strings.TrimSpace(title)
+
+	if title == "" {
+		return nil, nil
+	}
+
+	if match := regexp.MustCompile(`^([12]):(\d+)$`).FindStringSubmatch(title); len(match) == 3 {
+		return nil, nil
+	}
+
+	selection, err := b.Resolver.ResolveTVSelection(title)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if selection == nil {
+		return nil, nil
+	}
+
+	return &selection.Channel, nil
+
+}
+
+func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCreate, channel tvapi.Channel) {
+
+	voice := memberVoiceChannel(s, i)
+
+	if voice == nil {
+		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("Join a voice channel first, then try again.")})
+		return
+	}
+
+	session := b.Pool.Acquire()
+
+	if session == nil {
+		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("All streaming workers are busy right now. Try again shortly.")})
+		return
+	}
+
+	url, err := b.Resolver.TVStreamURL(channel.DaddyID)
+
+	if err != nil || url == "" {
+		b.Pool.Release(session)
+		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("No live source was available for that channel.")})
+		return
+	}
+
+	details := media.TVDetails(channel)
+	caption := truncate(channel.Name, 53)
+	daddyID := channel.DaddyID
+
+	streamMedia[session.ID] = streamTarget{Live: true, DaddyID: daddyID, Label: "Live"}
+
+	err = b.Pool.Play(context.Background(), session, pool.Request{
+		GuildID:      voice.GuildID,
+		ChannelID:    voice.ID,
+		Caption:      caption,
+		InitialURL:   url,
+		QualityLabel: "Live",
+		Headers:      config.TVStreamHeaders(),
+		Live:         true,
+		ResolveURL: func() (string, error) {
+			return b.Resolver.TVStreamURL(streamMedia[session.ID].DaddyID)
+		},
+		OnClose: func(reason pool.CloseReason) {
+			if reason == pool.CloseStopped {
+				delete(streamMedia, session.ID)
+				return
+			}
+
+			delete(streamMedia, session.ID)
+
+			embeds, components := endedCard(i.Message.Embeds, closeLabel(reason), true)
+			_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Embeds: &embeds, Components: &components})
+		},
+	})
+
+	if err != nil {
+		log.Printf("failed to start the live stream: %v", err)
+		delete(streamMedia, session.ID)
+		b.Pool.Release(session)
+		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("Couldn't join your voice channel to start streaming.")})
+		return
+	}
+
+	embed := liveStreamingEmbed(details, channel, voice.ID)
+	components := controlRow(session.ID, false, true)
+	editMessage(s, i, &discordgo.WebhookEdit{Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}), Components: ptrComponents(components)})
+
+}
+
+func liveStreamingEmbed(details media.TitleDetails, channel tvapi.Channel, voiceChannelID string) *discordgo.MessageEmbed {
+
+	embed := baseEmbed(details, "Now Streaming")
+
+	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+		Name: "Category", Value: channel.Category, Inline: true,
+	})
+
+	region := channel.Country.Name
+
+	if channel.Country.Flag != "" {
+		region = strings.TrimSpace(channel.Country.Flag + " " + region)
+	}
+
+	if region != "" {
+		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+			Name: "Region", Value: region, Inline: true,
+		})
+	}
+
+	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+		Name: "Channel", Value: fmt.Sprintf("<#%s>", voiceChannelID), Inline: true,
+	})
+
+	return embed
 
 }
 
@@ -310,9 +468,17 @@ func (b *Bot) handleControl(s *discordgo.Session, i *discordgo.InteractionCreate
 		b.Pool.Stop(session)
 		respondEmbed(s, i, embed)
 	case "pause":
+		if session.Live() {
+			respondEmbed(s, i, simpleEmbed("Stream Control", "Live TV", "Live streams cannot be paused."))
+			return
+		}
 		b.Pool.Pause(session)
 		respondEmbed(s, i, controlEmbed(b.Pool, session, "Stream Paused", "Playback has been paused."))
 	case "resume":
+		if session.Live() {
+			respondEmbed(s, i, simpleEmbed("Stream Control", "Live TV", "Live streams cannot be paused."))
+			return
+		}
 		b.Pool.Resume(session)
 		respondEmbed(s, i, controlEmbed(b.Pool, session, "Stream Resumed", "Playback has resumed."))
 	}
@@ -326,12 +492,17 @@ func (b *Bot) handleStopButton(s *discordgo.Session, i *discordgo.InteractionCre
 	}
 
 	session := b.Pool.Get(parts[2])
+	live := session != nil && session.Live()
 
 	if session != nil {
 		b.Pool.Stop(session)
 	}
 
-	embeds, components := endedCard(i.Message.Embeds, "Stream Ended")
+	if !live {
+		live = messageIsLiveStream(i.Message)
+	}
+
+	embeds, components := endedCard(i.Message.Embeds, "Stream Ended", live)
 	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseUpdateMessage, Data: &discordgo.InteractionResponseData{Embeds: embeds, Components: components}})
 
 }
@@ -345,12 +516,16 @@ func (b *Bot) handleToggleButton(s *discordgo.Session, i *discordgo.InteractionC
 	session := b.Pool.Get(parts[2])
 
 	if session == nil || !session.Busy {
-		embeds, components := endedCard(i.Message.Embeds, "Stream Ended")
+		embeds, components := endedCard(i.Message.Embeds, "Stream Ended", messageIsLiveStream(i.Message))
 		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseUpdateMessage, Data: &discordgo.InteractionResponseData{Embeds: embeds, Components: components}})
 		return
 	}
 
 	paused := parts[1] == "pause"
+
+	if session.Live() {
+		return
+	}
 
 	if paused {
 		b.Pool.Pause(session)
@@ -372,7 +547,7 @@ func (b *Bot) handleToggleButton(s *discordgo.Session, i *discordgo.InteractionC
 		embeds = []*discordgo.MessageEmbed{&card}
 	}
 
-	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseUpdateMessage, Data: &discordgo.InteractionResponseData{Embeds: embeds, Components: controlRow(parts[2], paused)}})
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseUpdateMessage, Data: &discordgo.InteractionResponseData{Embeds: embeds, Components: controlRow(parts[2], paused, session.Live())}})
 
 }
 

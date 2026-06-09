@@ -48,7 +48,7 @@ func (b *Bot) Start() error {
 func (b *Bot) registerCommands() error {
 
 	commands := []*discordgo.ApplicationCommand{
-		{Name: "stream", Description: "Stream a movie or TV show in your call.", Options: []*discordgo.ApplicationCommandOption{
+		{Name: "stream", Description: "Stream a movie, TV show, or live TV channel in your call.", Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "title", Description: "Search for something to watch.", Required: true, Autocomplete: true},
 		}},
 		{Name: "pause", Description: "Pause the active stream in your call."},

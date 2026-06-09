@@ -105,6 +105,16 @@ func FebboxStreamHeaders() map[string]string {
 
 }
 
+// TVStreamHeaders presents a browser tab for proxied live TV HLS playlists.
+func TVStreamHeaders() map[string]string {
+
+	return map[string]string{
+		"User-Agent":      browserUA,
+		"Accept-Language": "en-US,en;q=0.9",
+	}
+
+}
+
 // loadDotEnv reads a .env file into the process environment before config init.
 func loadDotEnv() {
 

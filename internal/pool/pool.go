@@ -31,6 +31,8 @@ type Request struct {
 	InitialURL   string
 	ResolveURL   source.UrlResolver
 	QualityLabel string
+	Headers      map[string]string // HTTP headers for HLS/direct input; defaults to Febbox when nil.
+	Live         bool              // Live streams cannot be paused and re-resolve on expiry.
 	OnClose      func(CloseReason)
 }
 
@@ -131,6 +133,17 @@ func (p *Pool) Get(id string) *Session {
 	defer p.mu.Unlock()
 
 	return p.sessions[id]
+
+}
+
+// Live reports whether the session is streaming a live source that cannot be paused.
+func (session *Session) Live() bool {
+
+	if session.request == nil {
+		return false
+	}
+
+	return session.request.Live
 
 }
 
@@ -338,7 +351,11 @@ func (p *Pool) runLoop(session *Session, request Request) {
 // stream downloads, transcodes, and plays one title; it blocks until playback ends.
 func (p *Pool) stream(ctx context.Context, session *Session, request Request) error {
 
-	headers := config.FebboxStreamHeaders()
+	headers := request.Headers
+
+	if headers == nil {
+		headers = config.FebboxStreamHeaders()
+	}
 
 	if source.IsHlsURL(request.InitialURL) {
 

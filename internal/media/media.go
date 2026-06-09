@@ -10,6 +10,7 @@ import (
 
 	"streamly/internal/config"
 	"streamly/internal/febapi"
+	"streamly/internal/tvapi"
 )
 
 const movie = febapi.BoxMovie // Showbox's discriminator for a movie.
@@ -30,10 +31,11 @@ type TitleDetails struct {
 	EpisodeTitles map[string]string
 }
 
-// Resolver bridges Showbox search and Febbox browsing into what the bot needs to stream.
+// Resolver bridges Showbox search, Febbox browsing, and live TV into what the bot needs to stream.
 type Resolver struct {
 	showbox *febapi.ShowboxClient
 	febbox  *febapi.FebboxClient
+	tv      *tvapi.TVClient
 }
 
 func NewResolver() *Resolver {
@@ -41,6 +43,7 @@ func NewResolver() *Resolver {
 	return &Resolver{
 		showbox: febapi.NewShowboxClient(febapi.ShowboxOptions{}),
 		febbox:  febapi.NewFebboxClient(febapi.FebboxOptions{Cookie: config.App.FebboxCookie}),
+		tv:      tvapi.NewTVClient(tvapi.TVOptions{}),
 	}
 
 }
