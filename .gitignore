@@ -1,0 +1,33 @@
+# Configuration
+
+.env
+.env.*
+!.env.example
+
+# Go build outputs
+
+/streamly
+/bin/
+/dist/
+*.test
+
+# Logs and runtime scratch
+
+*.log
+*.pid
+
+# Editor and OS stuff
+
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Native dependency build output
+
+/third_party/libdatachannel/CMakeFiles/
+/third_party/libdatachannel/build/
+
+# Local tool downloads
+
+/.tools/
