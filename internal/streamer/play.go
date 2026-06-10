@@ -25,12 +25,6 @@ func Play(ctx context.Context, s *Streamer, ts *transcode.Session) error {
 		return err
 	}
 
-	peer := streamConn.peer()
-
-	if peer == nil {
-		return fmt.Errorf("stream peer not ready")
-	}
-
 	defer func() {
 
 		streamConn.setSpeaking(false)
@@ -42,14 +36,11 @@ func Play(ctx context.Context, s *Streamer, ts *transcode.Session) error {
 	readyCtx, readyCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer readyCancel()
 
-	if err := peer.waitSendReady(readyCtx); err != nil {
+	sender := &mediaSender{streamConn: streamConn}
+
+	if _, err := sender.resolvePeer(readyCtx); err != nil {
 		return fmt.Errorf("stream not ready: %w", err)
 	}
-
-	streamConn.setSpeaking(true)
-	streamConn.setVideoAttributes(true, config.Stream.Width, config.Stream.Height, config.Stream.FrameRate)
-
-	sender := &mediaSender{peer: peer}
 
 	return sender.run(ctx, ts)
 
@@ -57,10 +48,55 @@ func Play(ctx context.Context, s *Streamer, ts *transcode.Session) error {
 
 // mediaSender ships the transcode's audio and video, pacing both against one shared clock.
 type mediaSender struct {
-	peer       *MediaPeer
+	streamConn *StreamConnection
+	activePeer *MediaPeer
 	clock      mediaClock
 	pauseMu    sync.Mutex
 	pauseEpoch uint64
+}
+
+func (s *mediaSender) resolvePeer(ctx context.Context) (*MediaPeer, error) {
+
+	peer := s.streamConn.peer()
+
+	if peer == nil || peer.closed.Load() {
+		ticker := time.NewTicker(200 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("stream peer unavailable: %w", ctx.Err())
+			case <-ticker.C:
+				peer = s.streamConn.peer()
+
+				if peer != nil && !peer.closed.Load() {
+					goto found
+				}
+
+			}
+
+		}
+
+	}
+
+found:
+
+	if peer == s.activePeer {
+		return peer, nil
+	}
+
+	if err := peer.waitSendReady(ctx); err != nil {
+		return nil, err
+	}
+
+	s.activePeer = peer
+	s.streamConn.setSpeaking(true)
+	s.streamConn.setVideoAttributes(true, config.Stream.Width, config.Stream.Height, config.Stream.FrameRate)
+
+	return peer, nil
+
 }
 
 // run drains both feeds concurrently so the encoder never blocks, while one clock keeps A/V in sync.
@@ -128,18 +164,24 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 				duration = frametime(kind)
 			}
 
+			peer, err := s.resolvePeer(ctx)
+
+			if err != nil {
+				return err
+			}
+
 			if kind == transcode.KindVideo {
 
-				s.peer.sendVideo(packet.Data, duration)
+				peer.sendVideo(packet.Data, duration)
 
 			} else {
 				if late := s.clock.lateness(packet.PTS); late > audioCorrectionThreshold {
-					s.peer.advanceAudio(duration)
+					peer.advanceAudio(duration)
 
 					continue
 				}
 
-				s.peer.sendAudio(packet.Data, duration)
+				peer.sendAudio(packet.Data, duration)
 			}
 
 		}
@@ -165,9 +207,11 @@ func (s *mediaSender) applyPauseEvent(ts *transcode.Session) {
 		return
 	}
 
-	s.clock.shift(duration)
-	s.peer.advanceAudio(duration)
-	s.peer.advanceVideo(duration)
+	if peer := s.activePeer; peer != nil {
+		s.clock.shift(duration)
+		peer.advanceAudio(duration)
+		peer.advanceVideo(duration)
+	}
 
 }
 

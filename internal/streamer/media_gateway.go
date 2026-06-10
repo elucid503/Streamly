@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -47,6 +48,9 @@ const (
 	voiceMLSInvalidCommit      = 31
 )
 
+// Discord voice-gateway close codes that should not trigger reconnect.
+const voiceCloseDisconnected = 4014
+
 type gatewayCallbacks struct {
 	gateway *mediaGateway
 }
@@ -87,20 +91,20 @@ type mediaGateway struct {
 	server    string
 	token     string
 
-	hasSession  bool
-	hasToken    bool
-	started     bool
-	closed      bool
-	readStarted bool
+	hasSession bool
+	hasToken   bool
+	closed     bool
 
 	dave     *daveSession
 	peer     *MediaPeer
 	ready    chan *MediaPeer
 	readDone chan struct{} // Closed when readLoop exits, so teardown can stop reading before destroying the peer.
 
-	mu   sync.Mutex
-	conn *websocket.Conn
-	seq  int
+	mu              sync.Mutex
+	conn            *websocket.Conn
+	seq             int
+	heartbeatCancel context.CancelFunc
+	reconnecting    atomic.Bool
 }
 
 func newMediaGateway(label, serverID, botID string, daveChannelID godave.ChannelID, ready chan *MediaPeer, signalingOnly bool) *mediaGateway {
@@ -122,28 +126,45 @@ func (g *mediaGateway) setDaveChannelID(channelID godave.ChannelID) {
 
 func (g *mediaGateway) setSession(sessionID string) {
 
+	g.mu.Lock()
 	g.sessionID = sessionID
 	g.hasSession = true
-	g.start()
+	g.mu.Unlock()
+
+	g.tryConnect()
 
 }
 
 func (g *mediaGateway) setTokens(server, token string) {
 
+	g.mu.Lock()
 	g.server = server
 	g.token = token
 	g.hasToken = true
-	g.start()
+	g.mu.Unlock()
+
+	g.tryConnect()
 
 }
 
-func (g *mediaGateway) start() {
+func (g *mediaGateway) tryConnect() {
 
-	if !g.hasSession || !g.hasToken || g.started {
+	g.mu.Lock()
+
+	if g.closed || !g.hasSession || !g.hasToken || g.conn != nil {
+		g.mu.Unlock()
 		return
 	}
 
-	g.started = true
+	g.mu.Unlock()
+
+	if err := g.dial(); err != nil {
+		log.Printf("[streamer] %s gateway dial: %v", g.label, err)
+	}
+
+}
+
+func (g *mediaGateway) dial() error {
 
 	endpoint := strings.TrimPrefix(g.server, "wss://")
 	endpoint = strings.TrimPrefix(endpoint, "https://")
@@ -153,14 +174,142 @@ func (g *mediaGateway) start() {
 	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 
 	if err != nil {
-		log.Printf("[streamer] %s gateway dial: %v", g.label, err)
-		return
+		return err
+	}
+
+	g.mu.Lock()
+
+	if g.closed {
+		g.mu.Unlock()
+		_ = conn.Close()
+		return fmt.Errorf("%s gateway closed", g.label)
 	}
 
 	g.conn = conn
-	g.readStarted = true
+	g.readDone = make(chan struct{})
+	g.mu.Unlock()
 
 	go g.readLoop()
+
+	return nil
+
+}
+
+func isIntentionalGatewayClose(err error) bool {
+
+	var closeErr *websocket.CloseError
+
+	if !errors.As(err, &closeErr) {
+		return false
+	}
+
+	return closeErr.Code == voiceCloseDisconnected
+
+}
+
+func (g *mediaGateway) stopHeartbeat() {
+
+	g.mu.Lock()
+	cancel := g.heartbeatCancel
+	g.heartbeatCancel = nil
+	g.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+
+}
+
+func (g *mediaGateway) resetPeer() {
+
+	if g.peer == nil {
+		return
+	}
+
+	g.peer.close()
+	g.peer = nil
+
+}
+
+func (g *mediaGateway) handleDisconnect(err error) {
+
+	g.stopHeartbeat()
+
+	g.mu.Lock()
+	conn := g.conn
+	g.conn = nil
+	g.mu.Unlock()
+
+	if conn != nil {
+		_ = conn.Close()
+	}
+
+	if !g.signalingOnly {
+		g.resetPeer()
+	}
+
+	if g.closed {
+		return
+	}
+
+	if isIntentionalGatewayClose(err) {
+		return
+	}
+
+	log.Printf("[streamer] %s gateway read: %v; reconnecting", g.label, err)
+
+	if !g.reconnecting.CompareAndSwap(false, true) {
+		return
+	}
+
+	go func() {
+
+		defer g.reconnecting.Store(false)
+		g.reconnectLoop()
+
+	}()
+
+}
+
+func (g *mediaGateway) reconnectLoop() {
+
+	backoff := time.Second
+	const maxBackoff = 30 * time.Second
+
+	for attempt := 1; ; attempt++ {
+
+		if g.closed {
+			return
+		}
+
+		g.mu.Lock()
+		hasCreds := g.hasSession && g.hasToken
+		g.mu.Unlock()
+
+		if !hasCreds {
+			log.Printf("[streamer] %s gateway reconnect skipped: missing session credentials", g.label)
+			return
+		}
+
+		time.Sleep(backoff)
+
+		if g.closed {
+			return
+		}
+
+		if err := g.dial(); err != nil {
+			log.Printf("[streamer] %s gateway reconnect attempt %d: %v", g.label, attempt, err)
+
+			backoff = min(backoff*2, maxBackoff)
+
+			continue
+		}
+
+		log.Printf("[streamer] %s gateway reconnected", g.label)
+
+		return
+
+	}
 
 }
 
@@ -173,10 +322,7 @@ func (g *mediaGateway) readLoop() {
 		messageType, raw, err := g.conn.ReadMessage()
 
 		if err != nil {
-			if !g.closed {
-				log.Printf("[streamer] %s gateway read: %v", g.label, err)
-			}
-
+			g.handleDisconnect(err)
 			return
 		}
 
@@ -272,18 +418,27 @@ func (g *mediaGateway) onHello(data json.RawMessage) {
 
 	_ = json.Unmarshal(data, &hello)
 
+	g.stopHeartbeat()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	g.mu.Lock()
+	g.heartbeatCancel = cancel
+	g.mu.Unlock()
+
 	go func() {
 
 		ticker := time.NewTicker(time.Duration(hello.HeartbeatInterval) * time.Millisecond)
 		defer ticker.Stop()
 
-		for range ticker.C {
+		for {
 
-			if g.closed {
+			select {
+			case <-ctx.Done():
 				return
+			case <-ticker.C:
+				_ = g.send(voiceHeartbeat, map[string]any{"t": time.Now().UnixMilli(), "seq_ack": g.seq})
 			}
-
-			_ = g.send(voiceHeartbeat, map[string]any{"t": time.Now().UnixMilli(), "seq_ack": g.seq})
 
 		}
 
@@ -538,21 +693,22 @@ func (g *mediaGateway) setVideoAttributes(enabled bool, width, height, fps int) 
 func (g *mediaGateway) stop() {
 
 	g.closed = true
+	g.stopHeartbeat()
 
 	// Close the socket and let readLoop exit first, so no handler touches the peer or DAVE while we tear them down.
 	g.mu.Lock()
 	conn := g.conn
 	g.conn = nil
-	started := g.readStarted
+	readDone := g.readDone
 	g.mu.Unlock()
 
 	if conn != nil {
 		_ = conn.Close()
 	}
 
-	if started {
+	if readDone != nil {
 		select {
-		case <-g.readDone:
+		case <-readDone:
 		case <-time.After(2 * time.Second):
 		}
 	}
