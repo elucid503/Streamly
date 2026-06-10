@@ -87,6 +87,9 @@ func (b *Bot) registerCommands() error {
 		{Name: "channels", Description: "Browse live TV channels and pick one to watch."},
 		{Name: "top", Description: "See trending movies and TV shows to watch."},
 		{Name: "now", Description: "See what is streaming in this server."},
+		{Name: "configure", Description: "Configure server streaming.", Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "key", Description: "The server key.", Required: true},
+		}},
 	}
 
 	guildID := config.App.GuildID
@@ -151,6 +154,8 @@ func (b *Bot) onCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		b.handleTop(s, i)
 	case "now":
 		b.handleNow(s, i)
+	case "configure":
+		b.handleConfigure(s, i)
 	default:
 		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Content: "Unknown command."}})
 	}

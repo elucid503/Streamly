@@ -71,6 +71,11 @@ func (b *Bot) handleChannelsComponent(s *discordgo.Session, i *discordgo.Interac
 
 		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseDeferredMessageUpdate})
 
+		if err := b.Pool.RequireAvailable(i.GuildID); err != nil {
+			editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr(err.Error())})
+			return
+		}
+
 		values := i.MessageComponentData().Values
 
 		if len(values) == 0 {

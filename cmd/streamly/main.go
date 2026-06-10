@@ -13,6 +13,7 @@ import (
 	"streamly/internal/db"
 	"streamly/internal/media"
 	"streamly/internal/pool"
+	"streamly/internal/workers"
 )
 
 func main() {
@@ -20,21 +21,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	p := pool.New()
+	store := workers.NewStore("workers.json")
+	p := pool.New(store)
 
-	if err := p.Login(ctx, config.App.UserTokens); err != nil {
+	if err := p.LoadWorkers(ctx); err != nil {
 
-		log.Fatalf("pool login failed: %v", err)
-
-	}
-
-	if p.Size() == 0 {
-
-		log.Fatal("no streaming accounts logged in; set USER_TOKENS to one or more valid user tokens")
+		log.Fatalf("workers load failed: %v", err)
 
 	}
 
-	log.Printf("[pool] streaming accounts ready: %d/%d", p.Size(), len(config.App.UserTokens))
+	log.Printf("[workers] streaming workers ready: %d", p.Size())
 
 	database, err := db.Connect(ctx, config.App.MongoURI)
 

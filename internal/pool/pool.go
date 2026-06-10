@@ -14,6 +14,13 @@ import (
 	"streamly/internal/source"
 	"streamly/internal/streamer"
 	"streamly/internal/transcode"
+	"streamly/internal/workers"
+)
+
+var (
+	ErrNoWorker        = errors.New("No worker is configured for your server.")
+	ErrWorkerBusy      = errors.New("A stream is already active in this server.")
+	ErrKeyChangeActive = errors.New("cannot change key while a stream is active")
 )
 
 // CloseReason is why a playback loop ended.
@@ -122,15 +129,16 @@ type Stats struct {
 	DurationMs      *int64
 }
 
-// Pool owns the streaming accounts and runs each download → transcode → play loop.
+// Pool owns one selfbot worker per guild and runs each download → transcode → play loop.
 type Pool struct {
 	mu       sync.Mutex
 	sessions map[string]*Session
+	store    *workers.Store
 }
 
-func New() *Pool {
+func New(store *workers.Store) *Pool {
 
-	return &Pool{sessions: make(map[string]*Session)}
+	return &Pool{sessions: make(map[string]*Session), store: store}
 
 }
 
@@ -143,11 +151,15 @@ func (p *Pool) Size() int {
 
 }
 
-func (p *Pool) Login(ctx context.Context, tokens []string) error {
+func (p *Pool) LoadWorkers(ctx context.Context) error {
 
-	for index, token := range tokens {
-		if err := p.add(ctx, fmt.Sprintf("slot-%d", index), token); err != nil {
-			log.Printf("streaming account slot-%d failed to log in: %v", index, err)
+	if err := p.store.Load(); err != nil {
+		return err
+	}
+
+	for guildID, entry := range p.store.All() {
+		if err := p.addWorker(ctx, guildID, entry.Token); err != nil {
+			log.Printf("worker for guild %s failed to log in: %v", guildID, err)
 		}
 	}
 
@@ -155,31 +167,50 @@ func (p *Pool) Login(ctx context.Context, tokens []string) error {
 
 }
 
-func (p *Pool) Acquire() *Session {
+func (p *Pool) RequireAvailable(guildID string) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	for _, session := range p.sessions {
+	session, ok := p.sessions[guildID]
 
-		if !session.Busy {
+	if !ok {
+		return ErrNoWorker
+	}
 
-			session.Busy = true
-			session.Paused = false
-			session.StopRequested = false
-			session.stats = &source.MediaSourceStats{}
-			session.Captions = &captions.Track{}
-			session.FontsDir = ""
-			session.CaptionSource = ""
-			session.CaptionQueryKey = ""
-
-			return session
-
-		}
-
+	if session.Busy {
+		return ErrWorkerBusy
 	}
 
 	return nil
+
+}
+
+func (p *Pool) Acquire(guildID string) (*Session, error) {
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	session, ok := p.sessions[guildID]
+
+	if !ok {
+		return nil, ErrNoWorker
+	}
+
+	if session.Busy {
+		return nil, ErrWorkerBusy
+	}
+
+	session.Busy = true
+	session.Paused = false
+	session.StopRequested = false
+	session.stats = &source.MediaSourceStats{}
+	session.Captions = &captions.Track{}
+	session.FontsDir = ""
+	session.CaptionSource = ""
+	session.CaptionQueryKey = ""
+
+	return session, nil
 
 }
 
@@ -203,18 +234,16 @@ func (session *Session) Live() bool {
 
 }
 
-// ActiveInGuild returns any busy stream session in the guild.
+// ActiveInGuild returns the busy stream session in the guild, if any.
 func (p *Pool) ActiveInGuild(guildID string) *Session {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	for _, session := range p.sessions {
+	session := p.sessions[guildID]
 
-		if session.Busy && session.request != nil && session.request.GuildID == guildID {
-			return session
-		}
-
+	if session != nil && session.Busy {
+		return session
 	}
 
 	return nil
@@ -226,27 +255,17 @@ func (p *Pool) Active(guildID, channelID string) *Session {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	var matches []*Session
+	session := p.sessions[guildID]
 
-	for _, session := range p.sessions {
-
-		if session.Busy && session.request != nil && session.request.GuildID == guildID {
-			matches = append(matches, session)
-		}
-
+	if session == nil || !session.Busy || session.request == nil {
+		return nil
 	}
 
-	for _, session := range matches {
-		if session.request.ChannelID == channelID {
-			return session
-		}
+	if channelID != "" && session.request.ChannelID != channelID {
+		return nil
 	}
 
-	if len(matches) > 0 {
-		return matches[0]
-	}
-
-	return nil
+	return session
 
 }
 
@@ -320,6 +339,16 @@ func (p *Pool) Play(ctx context.Context, session *Session, request Request) erro
 	}
 
 	log.Printf(`[stream] voice joined; starting pipeline for "%s"`, request.Caption)
+
+	session.Streamer.SetOnVoiceLeave(func() {
+		if !session.Busy {
+			return
+		}
+
+		if session.controller != nil {
+			session.controller()
+		}
+	})
 
 	go p.runLoop(session, request)
 
@@ -454,6 +483,7 @@ func (p *Pool) Release(session *Session) {
 	session.CaptionSource = ""
 	session.CaptionQueryKey = ""
 
+	session.Streamer.SetOnVoiceLeave(nil)
 	session.Streamer.LeaveVoice()
 
 	session.Busy = false
@@ -723,7 +753,16 @@ func (p *Pool) runSegment(ctx context.Context, session *Session, playback *strea
 
 }
 
-func (p *Pool) add(ctx context.Context, id, token string) error {
+func (p *Pool) SetKey(ctx context.Context, guildID, token string) error {
+
+	p.mu.Lock()
+
+	if session, ok := p.sessions[guildID]; ok && session.Busy {
+		p.mu.Unlock()
+		return ErrKeyChangeActive
+	}
+
+	p.mu.Unlock()
 
 	client, err := selfbot.NewClient(token)
 
@@ -735,10 +774,41 @@ func (p *Pool) add(ctx context.Context, id, token string) error {
 		return err
 	}
 
-	s := streamer.New(client)
+	if err := p.store.Set(guildID, token); err != nil {
+		return err
+	}
 
 	p.mu.Lock()
-	p.sessions[id] = &Session{ID: id, Client: client, Streamer: s, stats: &source.MediaSourceStats{}}
+
+	if existing := p.sessions[guildID]; existing != nil {
+		existing.Streamer.SetOnVoiceLeave(nil)
+		existing.Streamer.LeaveVoice()
+	}
+
+	stream := streamer.New(client)
+	p.sessions[guildID] = &Session{ID: guildID, Client: client, Streamer: stream, stats: &source.MediaSourceStats{}}
+	p.mu.Unlock()
+
+	return nil
+
+}
+
+func (p *Pool) addWorker(ctx context.Context, guildID, token string) error {
+
+	client, err := selfbot.NewClient(token)
+
+	if err != nil {
+		return err
+	}
+
+	if err := client.Login(ctx); err != nil {
+		return err
+	}
+
+	stream := streamer.New(client)
+
+	p.mu.Lock()
+	p.sessions[guildID] = &Session{ID: guildID, Client: client, Streamer: stream, stats: &source.MediaSourceStats{}}
 	p.mu.Unlock()
 
 	return nil

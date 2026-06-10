@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -118,6 +119,11 @@ func (b *Bot) onAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreat
 func (b *Bot) handleStream(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	_ = deferReply(s, i)
+
+	if err := b.Pool.RequireAvailable(i.GuildID); err != nil {
+		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr(err.Error())})
+		return
+	}
 
 	title := optionString(i, "title")
 
@@ -254,6 +260,11 @@ func (b *Bot) handleSelect(s *discordgo.Session, i *discordgo.InteractionCreate,
 			return
 		}
 
+		if err := b.Pool.RequireAvailable(i.GuildID); err != nil {
+			editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr(err.Error())})
+			return
+		}
+
 		season, _ := strconv.Atoi(parts[4])
 		episode, _ := strconv.Atoi(valueParts[1])
 
@@ -284,10 +295,10 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 		return
 	}
 
-	session := b.Pool.Acquire()
+	session, err := b.Pool.Acquire(channel.GuildID)
 
-	if session == nil {
-		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("All streaming workers are busy right now. Try again shortly.")})
+	if err != nil {
+		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr(workerErrorMessage(err))})
 		return
 	}
 
@@ -338,7 +349,7 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 
 	targetCopy := streamMedia[session.ID]
 
-	err := b.Pool.Play(context.Background(), session, pool.Request{
+	err = b.Pool.Play(context.Background(), session, pool.Request{
 		GuildID:      channel.GuildID,
 		ChannelID:    channel.ID,
 		Caption:      caption,
@@ -425,10 +436,10 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 		return
 	}
 
-	session := b.Pool.Acquire()
+	session, err := b.Pool.Acquire(voice.GuildID)
 
-	if session == nil {
-		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("All streaming workers are busy right now. Try again shortly.")})
+	if err != nil {
+		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr(workerErrorMessage(err))})
 		return
 	}
 
@@ -664,6 +675,16 @@ func streamingEmbed(details media.TitleDetails, channelID string, episode *episo
 	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{Name: "Channel", Value: fmt.Sprintf("<#%s>", channelID), Inline: true})
 
 	return embed
+
+}
+
+func workerErrorMessage(err error) string {
+
+	if errors.Is(err, pool.ErrNoWorker) || errors.Is(err, pool.ErrWorkerBusy) {
+		return err.Error()
+	}
+
+	return "Could not start streaming right now. Try again shortly."
 
 }
 

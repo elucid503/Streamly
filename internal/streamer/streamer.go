@@ -26,6 +26,7 @@ type Streamer struct {
 
 	mu              sync.Mutex
 	voiceConnection *VoiceConnection
+	onVoiceLeave    func()
 }
 
 func New(client *selfbot.Client) *Streamer {
@@ -60,8 +61,9 @@ func (s *Streamer) listen() {
 func (s *Streamer) onVoiceStateUpdate(data json.RawMessage) {
 
 	var payload struct {
-		UserID    string `json:"user_id"`
-		SessionID string `json:"session_id"`
+		UserID    string  `json:"user_id"`
+		ChannelID *string `json:"channel_id"`
+		SessionID string  `json:"session_id"`
 	}
 
 	_ = json.Unmarshal(data, &payload)
@@ -71,11 +73,31 @@ func (s *Streamer) onVoiceStateUpdate(data json.RawMessage) {
 	}
 
 	s.mu.Lock()
+	conn := s.voiceConnection
+	hadConnection := conn != nil
+	callback := s.onVoiceLeave
+
+	if conn != nil {
+		conn.setSession(payload.SessionID)
+	}
+
+	s.mu.Unlock()
+
+	leftChannel := payload.ChannelID == nil || *payload.ChannelID == ""
+
+	if hadConnection && leftChannel && callback != nil {
+		callback()
+	}
+
+}
+
+// SetOnVoiceLeave registers a callback for unexpected voice disconnects.
+func (s *Streamer) SetOnVoiceLeave(fn func()) {
+
+	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.voiceConnection != nil {
-		s.voiceConnection.setSession(payload.SessionID)
-	}
+	s.onVoiceLeave = fn
 
 }
 

@@ -16,7 +16,7 @@ const browserUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/5
 // Config holds bot-wide settings sourced from the environment.
 type Config struct {
 	DiscordToken  string   // Token for the real, command-handling bot.
-	UserTokens    []string // Selfbot tokens; one streaming slot each.
+	AdminUserIDs  []string // Discord user IDs allowed to configure server workers.
 	GuildID       string   // When set, slash commands register instantly to this guild.
 	FebboxCookie  string   // The `ui` cookie used to fetch Febbox media.
 	MongoURI      string   // MongoDB connection string for Streamly persistence.
@@ -55,7 +55,7 @@ func init() {
 
 	App = Config{
 		DiscordToken:  required("DISCORD_TOKEN"),
-		UserTokens:    parseTokens(os.Getenv("USER_TOKENS")),
+		AdminUserIDs:  parseIDs(os.Getenv("ADMIN_USER_IDS")),
 		GuildID:       os.Getenv("GUILD_ID"),
 		FebboxCookie:  required("FEBBOX_UI_COOKIE"),
 		MongoURI:      required("MONGO_URI"),
@@ -142,29 +142,29 @@ func required(name string) string {
 
 }
 
-func parseTokens(raw string) []string {
+func parseIDs(raw string) []string {
 
 	seen := make(map[string]struct{})
-	var tokens []string
+	var ids []string
 
 	for _, part := range strings.Split(raw, ",") {
 
-		token := strings.TrimSpace(part)
+		id := strings.TrimSpace(part)
 
-		if token == "" {
+		if id == "" {
 			continue
 		}
 
-		if _, ok := seen[token]; ok {
+		if _, ok := seen[id]; ok {
 			continue
 		}
 
-		seen[token] = struct{}{}
-		tokens = append(tokens, token)
+		seen[id] = struct{}{}
+		ids = append(ids, id)
 
 	}
 
-	return tokens
+	return ids
 
 }
 
