@@ -76,7 +76,21 @@ func controlEmbed(p *pool.Pool, session *pool.Session, header, description strin
 
 func controlRow(sessionID string, paused, live bool) []discordgo.MessageComponent {
 
+	label := "Pause"
+	kind := "pause"
+
+	if !live && paused {
+		label = "Resume"
+		kind = "resume"
+	}
+
 	components := []discordgo.MessageComponent{
+		discordgo.Button{
+			Label:    label,
+			CustomID: fmt.Sprintf("stream:%s:%s", kind, sessionID),
+			Style:    discordgo.SecondaryButton,
+			Disabled: live,
+		},
 		discordgo.Button{
 			Label:    "Stop",
 			CustomID: fmt.Sprintf("stream:stop:%s", sessionID),
@@ -84,99 +98,33 @@ func controlRow(sessionID string, paused, live bool) []discordgo.MessageComponen
 		},
 	}
 
-	if !live {
-
-		label := "Pause"
-
-		if paused {
-			label = "Resume"
-		}
-
-		kind := "pause"
-
-		if paused {
-			kind = "resume"
-		}
-
-		components = append([]discordgo.MessageComponent{
-			discordgo.Button{
-				Label:    label,
-				CustomID: fmt.Sprintf("stream:%s:%s", kind, sessionID),
-				Style:    discordgo.SecondaryButton,
-			},
-		}, components...)
-
-	}
-
 	return []discordgo.MessageComponent{
 		discordgo.ActionsRow{Components: components},
 	}
 
 }
 
-func endedControlRow(live bool) []discordgo.MessageComponent {
+func endedControlRow() []discordgo.MessageComponent {
 
-	components := []discordgo.MessageComponent{
-		discordgo.Button{Label: "Stop", CustomID: "stream:ended:stop", Style: discordgo.DangerButton, Disabled: true},
-	}
-
-	if !live {
-		components = append([]discordgo.MessageComponent{
+	return []discordgo.MessageComponent{
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 			discordgo.Button{Label: "Pause", CustomID: "stream:ended:pause", Style: discordgo.SecondaryButton, Disabled: true},
-		}, components...)
-	}
-
-	return []discordgo.MessageComponent{
-		discordgo.ActionsRow{Components: components},
+			discordgo.Button{Label: "Stop", CustomID: "stream:ended:stop", Style: discordgo.DangerButton, Disabled: true},
+		}},
 	}
 
 }
 
-// messageIsLiveStream reports whether a stream card used live-TV controls (Stop only, no Pause).
-func messageIsLiveStream(message *discordgo.Message) bool {
-
-	if message == nil || len(message.Components) == 0 {
-		return false
-	}
-
-	for _, row := range message.Components {
-
-		actionRow, ok := row.(*discordgo.ActionsRow)
-
-		if !ok {
-			continue
-		}
-
-		for _, component := range actionRow.Components {
-
-			button, ok := component.(*discordgo.Button)
-
-			if !ok {
-				continue
-			}
-
-			if button.Label == "Pause" || button.Label == "Resume" {
-				return false
-			}
-
-		}
-
-	}
-
-	return true
-
-}
-
-func endedCard(embeds []*discordgo.MessageEmbed, label string, live bool) ([]*discordgo.MessageEmbed, []discordgo.MessageComponent) {
+func endedCard(embeds []*discordgo.MessageEmbed, label string) ([]*discordgo.MessageEmbed, []discordgo.MessageComponent) {
 
 	if len(embeds) == 0 {
-		return nil, endedControlRow(live)
+		return nil, endedControlRow()
 	}
 
 	card := *embeds[0]
 	card.Author = &discordgo.MessageEmbedAuthor{Name: label}
 
-	return []*discordgo.MessageEmbed{&card}, endedControlRow(live)
+	return []*discordgo.MessageEmbed{&card}, endedControlRow()
 
 }
 

@@ -18,8 +18,9 @@ type Config struct {
 	DiscordToken string   // Token for the real, command-handling bot.
 	UserTokens   []string // Selfbot tokens; one streaming slot each.
 	GuildID      string   // When set, slash commands register instantly to this guild.
-	FebboxCookie string   // The `ui` cookie used to fetch Febbox media.
-	MongoURI     string   // MongoDB connection string for Streamly persistence.
+	FebboxCookie  string // The `ui` cookie used to fetch Febbox media.
+	MongoURI      string // MongoDB connection string for Streamly persistence.
+	IntroDBAPIKey string // Optional bearer token for TheIntroDB reads.
 }
 
 // StreamOptions holds libav transcode targets for every stream.
@@ -65,8 +66,9 @@ func init() {
 		DiscordToken: required("DISCORD_TOKEN"),
 		UserTokens:   parseTokens(os.Getenv("USER_TOKENS")),
 		GuildID:      os.Getenv("GUILD_ID"),
-		FebboxCookie: required("FEBBOX_UI_COOKIE"),
-		MongoURI:     required("MONGO_URI"),
+		FebboxCookie:  required("FEBBOX_UI_COOKIE"),
+		MongoURI:      required("MONGO_URI"),
+		IntroDBAPIKey: envString("INTRODB_API_KEY", ""),
 	}
 
 	Stream = StreamOptions{

@@ -22,6 +22,9 @@ package transcode
 #include "transcode_c.h"
 
 extern void streamlyTranscodeEmit(uintptr_t user, int kind, uint8_t *data, int len, int64_t pts_ms, int64_t dur_ms);
+extern int streamlyInputRead(uintptr_t user, uint8_t *buf, int len);
+extern int64_t streamlyInputSeek(uintptr_t user, int64_t offset, int whence);
+extern void streamlyTranscodeMeta(uintptr_t user, int64_t duration_ms);
 */
 import "C"
 
@@ -39,17 +42,17 @@ import (
 	"streamly/internal/config"
 )
 
-const inputBufferBytes = 64 * 1024 // Small bot-side jitter buffer without starving libav startup.
-
 const videoPacketChannelCap = 180 // About 6 seconds at 30 fps; enough for encoder jitter without runaway memory.
 const audioPacketChannelCap = 400 // About 8 seconds of 20 ms Opus, enough for HLS jitter without hiding pipeline drift.
 
-// emitTarget is the live destination for one transcode's encoded packets.
+// emitTarget is the live destination and input for one transcode's callbacks.
 type emitTarget struct {
-	ctx   context.Context
-	pause *pauseState
-	video chan<- Packet
-	audio chan<- Packet
+	ctx        context.Context
+	pause      *pauseState
+	video      chan<- Packet
+	audio      chan<- Packet
+	input      InputReader
+	onDuration func(durationMs int64)
 }
 
 var (
@@ -140,20 +143,80 @@ func streamlyTranscodeEmit(user C.uintptr_t, kind C.int, data *C.uint8_t, length
 
 }
 
-func startNative(request Request) (*Session, error) {
+//export streamlyInputRead
+func streamlyInputRead(user C.uintptr_t, buf *C.uint8_t, size C.int) C.int {
 
-	var videoReader, videoWriter *os.File
-	var err error
+	target := emitTargetByID(uintptr(user))
 
-	if request.InputURL == "" {
+	if target == nil || target.input == nil || size <= 0 {
+		return 0
+	}
 
-		videoReader, videoWriter, err = os.Pipe()
+	out := unsafe.Slice((*byte)(buf), int(size))
+
+	for {
+
+		if target.ctx.Err() != nil {
+			return 0
+		}
+
+		n, err := target.input.Read(out)
+
+		if n > 0 {
+			return C.int(n)
+		}
+
+		if err == io.EOF {
+			return 0
+		}
 
 		if err != nil {
-			return nil, err
+			return -1
 		}
 
 	}
+
+}
+
+//export streamlyInputSeek
+func streamlyInputSeek(user C.uintptr_t, offset C.int64_t, whence C.int) C.int64_t {
+
+	target := emitTargetByID(uintptr(user))
+
+	if target == nil || target.input == nil {
+		return -1
+	}
+
+	if whence == C.STREAMLY_SEEK_SIZE {
+		return C.int64_t(target.input.Size())
+	}
+
+	position, err := target.input.Seek(int64(offset), int(whence))
+
+	if err != nil {
+		return -1
+	}
+
+	return C.int64_t(position)
+
+}
+
+//export streamlyTranscodeMeta
+func streamlyTranscodeMeta(user C.uintptr_t, durationMs C.int64_t) {
+
+	target := emitTargetByID(uintptr(user))
+
+	if target == nil || target.onDuration == nil {
+		return
+	}
+
+	if durationMs > 0 {
+		target.onDuration(int64(durationMs))
+	}
+
+}
+
+func startNative(request Request) (*Session, error) {
 
 	video := make(chan Packet, videoPacketChannelCap)
 	audio := make(chan Packet, audioPacketChannelCap)
@@ -161,23 +224,21 @@ func startNative(request Request) (*Session, error) {
 
 	pause := newPauseState()
 
-	feedCtx, feedCancel := context.WithCancel(request.Context)
-
-	if request.InputURL == "" {
-
-		go feedInput(feedCtx, pause, request.Source, videoWriter)
-
+	target := &emitTarget{
+		ctx:        request.Context,
+		pause:      pause,
+		video:      video,
+		audio:      audio,
+		input:      request.Source,
+		onDuration: request.OnDuration,
 	}
 
-	target := &emitTarget{ctx: request.Context, pause: pause, video: video, audio: audio}
 	id := registerEmitTarget(target)
 
 	abortFlag := (*C.bool)(C.malloc(C.size_t(unsafe.Sizeof(C.bool(false)))))
 
 	if abortFlag == nil {
-		feedCancel()
 		unregisterEmitTarget(id)
-		closePipes(videoReader, videoWriter)
 
 		return nil, fmt.Errorf("failed to allocate abort flag")
 	}
@@ -201,7 +262,6 @@ func startNative(request Request) (*Session, error) {
 
 		<-request.Context.Done()
 		setAbort()
-		feedCancel()
 
 	}()
 
@@ -256,16 +316,18 @@ func startNative(request Request) (*Session, error) {
 		font_size:           C.int(config.Overlay.FontSize),
 		opacity:             C.float(config.Overlay.Opacity),
 		margin:              C.int(config.Overlay.Margin),
-		video_fd:            -1,
 		input_url:           inputURLCString,
 		headers:             headersCString,
+		start_ms:            C.int64_t(request.Start.Milliseconds()),
 		emit:                C.streamly_emit_cb(C.streamlyTranscodeEmit),
+		meta_cb:             C.streamly_meta_cb(C.streamlyTranscodeMeta),
 		emit_user:           C.uintptr_t(id),
 		abort_flag:          abortFlag,
 	}
 
-	if videoReader != nil {
-		params.video_fd = C.int(videoReader.Fd())
+	if request.Source != nil {
+		params.read_cb = C.streamly_read_cb(C.streamlyInputRead)
+		params.seek_cb = C.streamly_seek_cb(C.streamlyInputSeek)
 	}
 
 	handle := C.transcode_start(&params)
@@ -278,13 +340,11 @@ func startNative(request Request) (*Session, error) {
 
 	if handle == nil {
 		setAbort()
-		feedCancel()
 		unregisterEmitTarget(id)
 		abortMu.Lock()
 		C.free(unsafe.Pointer(abortFlag))
 		abortFlag = nil
 		abortMu.Unlock()
-		closePipes(videoReader, videoWriter)
 
 		if captionFile != "" {
 			_ = os.Remove(captionFile)
@@ -296,16 +356,6 @@ func startNative(request Request) (*Session, error) {
 	go func() {
 
 		exitCode := C.transcode_join(handle)
-
-		feedCancel()
-
-		if videoWriter != nil {
-			videoWriter.Close()
-		}
-
-		if videoReader != nil {
-			videoReader.Close()
-		}
 
 		close(video)
 		close(audio)
@@ -391,54 +441,10 @@ func transcodeError(handle *C.transcode_handle_t, exitCode int) error {
 
 }
 
-func feedInput(ctx context.Context, pause *pauseState, reader io.Reader, writer *os.File) {
-
-	defer writer.Close()
-
-	buffer := make([]byte, inputBufferBytes)
-
-	for {
-
-		if ctx.Err() != nil {
-			return
-		}
-
-		if !pause.Wait(ctx) {
-			return
-		}
-
-		n, err := reader.Read(buffer)
-
-		if n > 0 {
-
-			if _, writeErr := writer.Write(buffer[:n]); writeErr != nil {
-				return
-			}
-
-		}
-
-		if err != nil {
-			return
-		}
-
-	}
-
-}
-
 func freeCString(value *C.char) {
 
 	if value != nil {
 		C.free(unsafe.Pointer(value))
-	}
-
-}
-
-func closePipes(files ...*os.File) {
-
-	for _, file := range files {
-		if file != nil {
-			file.Close()
-		}
 	}
 
 }

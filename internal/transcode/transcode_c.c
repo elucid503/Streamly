@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include <libavcodec/avcodec.h>
 #include <libavfilter/avfilter.h>
@@ -25,6 +24,12 @@
 #define INPUT_OPEN_MAX_RETRIES 5
 #define INPUT_OPEN_RETRY_BASE_US 300000
 
+// Suppress libav warnings globally before any goroutine can call into libav.
+// The per-session av_log_set_level in transcode_run is a belt-and-suspenders fallback.
+__attribute__((constructor)) static void init_av_log(void) {
+    av_log_set_level(AV_LOG_ERROR);
+}
+
 typedef struct PacketNode {
     AVPacket *pkt;
     struct PacketNode *next;
@@ -40,10 +45,12 @@ typedef struct PacketQueue {
     int exit_code;
 } PacketQueue;
 
-typedef struct FdIO {
-    int fd;
+typedef struct CbIO {
+    streamly_read_cb read_cb;
+    streamly_seek_cb seek_cb;
+    uintptr_t user;
     volatile bool *abort_flag;
-} FdIO;
+} CbIO;
 
 typedef struct InterruptState {
     volatile bool *abort_flag;
@@ -51,8 +58,11 @@ typedef struct InterruptState {
 
 typedef struct StreamPipeline {
     AVFormatContext *fmt;
+    AVIOContext *avio; // Custom IO context when reading via Go callbacks; NULL for URL input.
     AVCodecContext *dec;
     int stream_index;
+    AVRational tb; // Demuxer stream time base, for the post-seek discard window.
+    int64_t skip_until_us; // Decoded frames before this input timestamp are dropped; -1 disables.
     PacketQueue queue;
 
     AVFrame *frame;
@@ -101,39 +111,51 @@ static void set_error(struct transcode_handle *handle, const char *msg) {
 
 }
 
-static int fd_read_packet(void *opaque, uint8_t *buf, int buf_size) {
+static int cb_read_packet(void *opaque, uint8_t *buf, int buf_size) {
 
-    FdIO *io = opaque;
+    CbIO *io = opaque;
 
     if (io->abort_flag && *io->abort_flag) {
         return AVERROR_EOF;
     }
 
-    for (;;) {
+    int n = io->read_cb(io->user, buf, buf_size);
 
-        ssize_t n = read(io->fd, buf, (size_t)buf_size);
-
-        if (n < 0) {
-
-            if (errno == EINTR) {
-                continue;
-            }
-
-            if (errno == EAGAIN) {
-                av_usleep(1000);
-                continue;
-            }
-
-            return AVERROR(errno);
-        }
-
-        if (n == 0) {
-            return AVERROR_EOF;
-        }
-
-        return (int)n;
+    if (n > 0) {
+        return n;
     }
 
+    if (n == 0) {
+        return AVERROR_EOF;
+    }
+
+    return AVERROR(EIO);
+}
+
+static int64_t cb_seek(void *opaque, int64_t offset, int whence) {
+
+    CbIO *io = opaque;
+
+    if (io->abort_flag && *io->abort_flag) {
+        return AVERROR(EIO);
+    }
+
+    if (whence & AVSEEK_SIZE) {
+
+        int64_t size = io->seek_cb(io->user, 0, STREAMLY_SEEK_SIZE);
+
+        return size >= 0 ? size : AVERROR(ENOSYS);
+    }
+
+    whence &= ~AVSEEK_FORCE;
+
+    if (whence != SEEK_SET && whence != SEEK_CUR && whence != SEEK_END) {
+        return AVERROR(EINVAL);
+    }
+
+    int64_t pos = io->seek_cb(io->user, offset, whence);
+
+    return pos >= 0 ? pos : AVERROR(EIO);
 }
 
 static int interrupt_callback(void *opaque) {
@@ -143,16 +165,18 @@ static int interrupt_callback(void *opaque) {
     return state && state->abort_flag && *state->abort_flag;
 }
 
-static int open_input_fd(int fd, volatile bool *abort_flag, AVFormatContext **fmt_out) {
+static int open_input_cb(const transcode_params_t *params, AVFormatContext **fmt_out, AVIOContext **avio_out) {
 
-    FdIO *io = av_mallocz(sizeof(FdIO));
+    CbIO *io = av_mallocz(sizeof(CbIO));
 
     if (!io) {
         return AVERROR(ENOMEM);
     }
 
-    io->fd = fd;
-    io->abort_flag = abort_flag;
+    io->read_cb = params->read_cb;
+    io->seek_cb = params->seek_cb;
+    io->user = params->emit_user;
+    io->abort_flag = params->abort_flag;
 
     uint8_t *buffer = av_malloc(INPUT_AVIO_SIZE);
 
@@ -161,7 +185,8 @@ static int open_input_fd(int fd, volatile bool *abort_flag, AVFormatContext **fm
         return AVERROR(ENOMEM);
     }
 
-    AVIOContext *avio = avio_alloc_context(buffer, INPUT_AVIO_SIZE, 0, io, fd_read_packet, NULL, NULL);
+    AVIOContext *avio = avio_alloc_context(buffer, INPUT_AVIO_SIZE, 0, io, cb_read_packet, NULL,
+                                           params->seek_cb ? cb_seek : NULL);
 
     if (!avio) {
         av_free(buffer);
@@ -173,6 +198,7 @@ static int open_input_fd(int fd, volatile bool *abort_flag, AVFormatContext **fm
 
     if (!fmt) {
         avio_context_free(&avio);
+        av_free(io);
         return AVERROR(ENOMEM);
     }
 
@@ -188,6 +214,9 @@ static int open_input_fd(int fd, volatile bool *abort_flag, AVFormatContext **fm
 
     if (ret < 0) {
         avformat_close_input(&fmt);
+        av_freep(&avio->buffer);
+        avio_context_free(&avio);
+        av_free(io);
         return ret;
     }
 
@@ -195,10 +224,14 @@ static int open_input_fd(int fd, volatile bool *abort_flag, AVFormatContext **fm
 
     if (ret < 0) {
         avformat_close_input(&fmt);
+        av_freep(&avio->buffer);
+        avio_context_free(&avio);
+        av_free(io);
         return ret;
     }
 
     *fmt_out = fmt;
+    *avio_out = avio;
     return 0;
 }
 
@@ -1000,6 +1033,19 @@ static int process_video_packet(StreamPipeline *video, OutputPipeline *vout,
             return ret;
         }
 
+        if (video->skip_until_us >= 0) {
+
+            int64_t ts = video->frame->best_effort_timestamp;
+
+            if (ts != AV_NOPTS_VALUE && av_rescale_q(ts, video->tb, AV_TIME_BASE_Q) < video->skip_until_us) {
+                av_frame_unref(video->frame);
+                continue;
+            }
+
+            video->skip_until_us = -1;
+            video->dec->skip_frame = AVDISCARD_DEFAULT;
+        }
+
         ret = av_buffersrc_add_frame_flags(filt_src, video->frame, AV_BUFFERSRC_FLAG_KEEP_REF);
 
         if (ret < 0) {
@@ -1056,6 +1102,18 @@ static int process_audio_packet(StreamPipeline *audio, OutputPipeline *aout,
 
         if (ret < 0) {
             return ret;
+        }
+
+        if (audio->skip_until_us >= 0) {
+
+            int64_t ts = audio->frame->best_effort_timestamp;
+
+            if (ts != AV_NOPTS_VALUE && av_rescale_q(ts, audio->tb, AV_TIME_BASE_Q) < audio->skip_until_us) {
+                av_frame_unref(audio->frame);
+                continue;
+            }
+
+            audio->skip_until_us = -1;
         }
 
         if (!swr) {
@@ -1180,6 +1238,12 @@ static void cleanup_stream(StreamPipeline *pipe) {
         avformat_close_input(&pipe->fmt);
     }
 
+    if (pipe->avio) {
+        av_freep(&pipe->avio->buffer);
+        av_freep(&pipe->avio->opaque);
+        avio_context_free(&pipe->avio);
+    }
+
 }
 
 static int transcode_run(struct transcode_handle *handle) {
@@ -1200,13 +1264,48 @@ static int transcode_run(struct transcode_handle *handle) {
 
     if (params.input_url && params.input_url[0] != '\0') {
         ret = open_input_url(params.input_url, params.headers, params.abort_flag, &handle->interrupt, &video.fmt);
+    } else if (params.read_cb) {
+        ret = open_input_cb(&params, &video.fmt, &video.avio);
     } else {
-        ret = open_input_fd(params.video_fd, params.abort_flag, &video.fmt);
+        ret = AVERROR(EINVAL);
     }
 
     if (ret < 0) {
         set_error(handle, "failed to open video input");
         goto done;
+    }
+
+    if (params.meta_cb) {
+
+        int64_t duration_ms = -1;
+
+        if (video.fmt->duration != AV_NOPTS_VALUE && video.fmt->duration > 0) {
+            duration_ms = video.fmt->duration / 1000;
+        }
+
+        params.meta_cb(params.emit_user, duration_ms);
+    }
+
+    // Jump to the requested start by container index, then discard decoded frames
+    // up to the exact target so audio and video both begin precisely there.
+    int64_t skip_until_us = -1;
+
+    if (params.start_ms > 0) {
+
+        int64_t target_us = params.start_ms * 1000;
+
+        if (video.fmt->start_time != AV_NOPTS_VALUE) {
+            target_us += video.fmt->start_time;
+        }
+
+        ret = av_seek_frame(video.fmt, -1, target_us, AVSEEK_FLAG_BACKWARD);
+
+        if (ret < 0) {
+            set_error(handle, "failed to seek input");
+            goto done;
+        }
+
+        skip_until_us = target_us;
     }
 
     ret = open_decoder(video.fmt, AVMEDIA_TYPE_VIDEO, &video.dec, &video.stream_index);
@@ -1216,10 +1315,23 @@ static int transcode_run(struct transcode_handle *handle) {
         goto done;
     }
 
+    video.tb = video.fmt->streams[video.stream_index]->time_base;
+    video.skip_until_us = skip_until_us;
+
+    // During seek-in, skip non-reference (B) frames: they're the source of
+    // "co located POCs unavailable" / "mmco: unref short failure" warnings because
+    // their co-located reference frames were never decoded. I/P frames are still
+    // decoded normally to rebuild the DPB before we start encoding.
+    if (skip_until_us >= 0) {
+        video.dec->skip_frame = AVDISCARD_NONREF;
+    }
+
     ret = open_decoder(video.fmt, AVMEDIA_TYPE_AUDIO, &audio.dec, &audio.stream_index);
 
     if (ret >= 0) {
         audio.fmt = NULL;
+        audio.tb = video.fmt->streams[audio.stream_index]->time_base;
+        audio.skip_until_us = skip_until_us;
         have_audio = true;
     }
 
@@ -1353,6 +1465,11 @@ static int transcode_run(struct transcode_handle *handle) {
         if (have_audio) {
             flush_audio_pipeline(&aout);
         }
+    }
+
+    // Draining legitimately ends in EOF/EAGAIN; only real errors should fail the job.
+    if (ret == AVERROR_EOF || ret == AVERROR(EAGAIN)) {
+        ret = 0;
     }
 
 done:

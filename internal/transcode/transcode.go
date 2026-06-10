@@ -28,14 +28,24 @@ type Packet struct {
 	Duration time.Duration
 }
 
+// InputReader is a byte-seekable media input; Size returns total bytes or -1 when unknown.
+// Byte seeks let libavformat use the container index, which is what makes /seek fast.
+type InputReader interface {
+	io.ReadSeeker
+	Size() int64
+}
+
 // Request describes one libav transcode job fed from in-process media readers.
 type Request struct {
-	Source   io.Reader // Progressive media, muxed audio+video.
-	InputURL string    // Direct media URL; HLS uses libavformat's in-process demuxer.
+	Source   InputReader // Progressive media, muxed audio+video.
+	InputURL string      // Direct media URL; HLS uses libavformat's in-process demuxer.
 	Headers  map[string]string
-	Caption  string // Bottom-right label burned in when overlay assets exist.
-	Key      string // Unique per playback; names scratch caption files.
+	Start    time.Duration // Initial playback position; 0 plays from the beginning.
+	Caption  string        // Bottom-right label burned in when overlay assets exist.
+	Key      string        // Unique per playback; names scratch caption files.
 	Context  context.Context
+
+	OnDuration func(durationMs int64) // Called once when the container duration is known.
 }
 
 // Session is a running transcode: encoded video/audio feeds, completion state, and pause control.
@@ -186,9 +196,9 @@ func Start(request Request) (*Session, error) {
 	}
 
 	if request.InputURL != "" {
-		log.Printf("[transcode] libav started %q (direct input)", label)
+		log.Printf("[transcode] libav started %q (direct input) at %s", label, request.Start)
 	} else {
-		log.Printf("[transcode] libav started %q", label)
+		log.Printf("[transcode] libav started %q at %s", label, request.Start)
 	}
 
 	return startNative(request)

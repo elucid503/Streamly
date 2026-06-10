@@ -34,6 +34,11 @@ type streamTarget struct {
 
 func (b *Bot) onAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
+	if i.ApplicationCommandData().Name == "seek" {
+		b.onSeekAutocomplete(s, i)
+		return
+	}
+
 	query := ""
 
 	for _, option := range i.ApplicationCommandData().Options {
@@ -333,7 +338,7 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 
 			delete(streamMedia, session.ID)
 
-			embeds, components := endedCard(i.Message.Embeds, closeLabel(reason), false)
+			embeds, components := endedCard(i.Message.Embeds, closeLabel(reason))
 			_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Embeds: &embeds, Components: &components})
 		},
 	})
@@ -435,7 +440,7 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 
 			delete(streamMedia, session.ID)
 
-			embeds, components := endedCard(i.Message.Embeds, closeLabel(reason), true)
+			embeds, components := endedCard(i.Message.Embeds, closeLabel(reason))
 			_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Embeds: &embeds, Components: &components})
 		},
 	})
@@ -517,17 +522,12 @@ func (b *Bot) handleStopButton(s *discordgo.Session, i *discordgo.InteractionCre
 	}
 
 	session := b.Pool.Get(parts[2])
-	live := session != nil && session.Live()
 
 	if session != nil {
 		b.Pool.Stop(session)
 	}
 
-	if !live {
-		live = messageIsLiveStream(i.Message)
-	}
-
-	embeds, components := endedCard(i.Message.Embeds, "Stream Ended", live)
+	embeds, components := endedCard(i.Message.Embeds, "Stream Ended")
 	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseUpdateMessage, Data: &discordgo.InteractionResponseData{Embeds: embeds, Components: components}})
 
 }
@@ -541,7 +541,7 @@ func (b *Bot) handleToggleButton(s *discordgo.Session, i *discordgo.InteractionC
 	session := b.Pool.Get(parts[2])
 
 	if session == nil || !session.Busy {
-		embeds, components := endedCard(i.Message.Embeds, "Stream Ended", messageIsLiveStream(i.Message))
+		embeds, components := endedCard(i.Message.Embeds, "Stream Ended")
 		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseUpdateMessage, Data: &discordgo.InteractionResponseData{Embeds: embeds, Components: components}})
 		return
 	}

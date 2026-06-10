@@ -10,6 +10,7 @@ import (
 
 	"streamly/internal/config"
 	"streamly/internal/febapi"
+	"streamly/internal/source"
 	"streamly/internal/tvapi"
 )
 
@@ -28,6 +29,8 @@ type TitleDetails struct {
 	Poster        string
 	Description   string
 	IMDBRating    string
+	TMDBId        int
+	IMDBId        string
 	EpisodeTitles map[string]string
 }
 
@@ -114,6 +117,8 @@ func (r *Resolver) Details(selection Selection) (TitleDetails, error) {
 		Poster:        fallback(text("poster"), fallback(text("poster_org"), text("poster_min"))),
 		Description:   text("description"),
 		IMDBRating:    text("imdb_rating"),
+		TMDBId:        intFromAny(raw["tmdb_id"]),
+		IMDBId:        text("imdb_id"),
 		EpisodeTitles: episodeTitleMap(raw),
 	}, nil
 
@@ -258,10 +263,25 @@ func QualityHeight(quality febapi.FileQuality) int {
 
 }
 
+// PickQuality chooses the source closest to the target height. Progressive files are
+// preferred over HLS playlists: they stream through the byte-seekable pipeline, which
+// is what makes /seek work (libav 6.1's HLS demuxer corrupts fMP4 streams on seek).
 func PickQuality(qualities []febapi.FileQuality, target int) *febapi.FileQuality {
 
 	if len(qualities) == 0 {
 		return nil
+	}
+
+	progressive := make([]febapi.FileQuality, 0, len(qualities))
+
+	for _, quality := range qualities {
+		if quality.URL != "" && !source.IsHlsURL(quality.URL) {
+			progressive = append(progressive, quality)
+		}
+	}
+
+	if len(progressive) > 0 {
+		qualities = progressive
 	}
 
 	sorted := append([]febapi.FileQuality(nil), qualities...)
@@ -328,5 +348,23 @@ func fallback(values ...string) string {
 	}
 
 	return ""
+
+}
+
+func intFromAny(value any) int {
+
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case string:
+		parsed, _ := strconv.Atoi(strings.TrimSpace(typed))
+		return parsed
+	default:
+		return 0
+	}
 
 }

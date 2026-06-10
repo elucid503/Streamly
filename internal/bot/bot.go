@@ -7,6 +7,7 @@ import (
 
 	"streamly/internal/config"
 	"streamly/internal/db"
+	"streamly/internal/introdb"
 	"streamly/internal/media"
 	"streamly/internal/pool"
 )
@@ -17,6 +18,7 @@ type Bot struct {
 	Resolver *media.Resolver
 	Pool     *pool.Pool
 	DB       *db.Client
+	IntroDB  *introdb.Client
 }
 
 func New(resolver *media.Resolver, p *pool.Pool, database *db.Client) (*Bot, error) {
@@ -29,7 +31,7 @@ func New(resolver *media.Resolver, p *pool.Pool, database *db.Client) (*Bot, err
 
 	session.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildVoiceStates
 
-	bot := &Bot{Session: session, Resolver: resolver, Pool: p, DB: database}
+	bot := &Bot{Session: session, Resolver: resolver, Pool: p, DB: database, IntroDB: introdb.NewClient(introdb.ClientOptions{APIKey: config.App.IntroDBAPIKey})}
 
 	session.AddHandler(bot.onInteraction)
 
@@ -55,6 +57,10 @@ func (b *Bot) registerCommands() error {
 		}},
 		{Name: "pause", Description: "Pause the active stream in your call."},
 		{Name: "resume", Description: "Resume the paused stream in your call."},
+		{Name: "seek", Description: "Jump to a position in the active stream.", Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "position", Description: "Enter a time to jump to (eg: 4:20 or +30).", Required: true, Autocomplete: true},
+		}},
+		{Name: "skip-intro", Description: "Skip past the intro in the active stream."},
 		{Name: "stop", Description: "Stop the active stream in your call."},
 		{Name: "stats", Description: "Show stats for the active stream in your call."},
 		{Name: "channels", Description: "Browse live TV channels and pick one to watch."},
@@ -84,7 +90,12 @@ func (b *Bot) registerCommands() error {
 		scope = "to guild " + config.App.GuildID
 	}
 
-	log.Printf("[startup] logged in as %s; %d commands registered %s.", b.Session.State.User.Username, len(commands), scope)
+	introdbStatus := "TheIntroDB unauthenticated"
+	if config.App.IntroDBAPIKey != "" {
+		introdbStatus = "TheIntroDB API key configured"
+	}
+
+	log.Printf("[startup] logged in as %s; %d commands registered %s; %s.", b.Session.State.User.Username, len(commands), scope, introdbStatus)
 
 	return nil
 
@@ -112,6 +123,10 @@ func (b *Bot) onCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		b.handleControl(s, i, "pause")
 	case "resume":
 		b.handleControl(s, i, "resume")
+	case "seek":
+		b.handleSeek(s, i)
+	case "skip-intro":
+		b.handleSkipIntro(s, i)
 	case "stop":
 		b.handleControl(s, i, "stop")
 	case "stats":
