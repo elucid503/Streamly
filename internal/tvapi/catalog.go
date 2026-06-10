@@ -187,6 +187,28 @@ func (catalog *ChannelCatalog) PopularUS(limit int) []Channel {
 
 }
 
+// Sorted returns channels ranked by US popularity, then alphabetically by name.
+func (catalog *ChannelCatalog) Sorted() []Channel {
+
+	channels := append([]Channel(nil), catalog.Channels...)
+
+	sort.Slice(channels, func(i, j int) bool {
+
+		left := popularityRank(channels[i].Slug)
+		right := popularityRank(channels[j].Slug)
+
+		if left != right {
+			return left < right
+		}
+
+		return strings.Compare(channels[i].Name, channels[j].Name) < 0
+
+	})
+
+	return channels
+
+}
+
 func popularityRank(slug string) int {
 
 	slug = strings.ToLower(slug)

@@ -22,6 +22,17 @@ type SearchResult struct {
 	ID      int     `json:"id"`
 	BoxType BoxType `json:"box_type"` // Tells ShowboxClient.GetFebBoxID which detail endpoint to resolve.
 	Title   string  `json:"title"`
+
+	Year        int    `json:"year,omitempty"`
+	Poster      string `json:"poster,omitempty"`
+	Description string `json:"description,omitempty"`
+	IMDBRating  string `json:"imdb_rating,omitempty"`
+}
+
+// TopList is a curated Showbox ranking category (e.g. "Popular on Netflix").
+type TopList struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
 }
 
 // FebboxFile is an entry in a Febbox shared folder; either a file or a sub-folder.

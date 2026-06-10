@@ -22,6 +22,8 @@
 #define PACKET_QUEUE_CAP 64
 #define AUDIO_DRAIN_BATCH 3
 #define ERR_BUF 2048
+#define INPUT_OPEN_MAX_RETRIES 5
+#define INPUT_OPEN_RETRY_BASE_US 300000
 
 typedef struct PacketNode {
     AVPacket *pkt;
@@ -200,12 +202,8 @@ static int open_input_fd(int fd, volatile bool *abort_flag, AVFormatContext **fm
     return 0;
 }
 
-static int open_input_url(const char *url, const char *headers, volatile bool *abort_flag,
-                          InterruptState *interrupt, AVFormatContext **fmt_out) {
-
-    if (!url || url[0] == '\0') {
-        return AVERROR(EINVAL);
-    }
+static int open_input_url_once(const char *url, const char *headers, volatile bool *abort_flag,
+                               InterruptState *interrupt, AVFormatContext **fmt_out) {
 
     AVFormatContext *fmt = avformat_alloc_context();
 
@@ -223,6 +221,8 @@ static int open_input_url(const char *url, const char *headers, volatile bool *a
     av_dict_set(&opts, "reconnect", "1", 0);
     av_dict_set(&opts, "reconnect_streamed", "1", 0);
     av_dict_set(&opts, "reconnect_on_network_error", "1", 0);
+    av_dict_set(&opts, "reconnect_delay_max", "5", 0);
+    av_dict_set(&opts, "rw_timeout", "15000000", 0);
 
     if (headers && headers[0] != '\0') {
         av_dict_set(&opts, "headers", headers, 0);
@@ -245,6 +245,37 @@ static int open_input_url(const char *url, const char *headers, volatile bool *a
 
     *fmt_out = fmt;
     return 0;
+}
+
+static int open_input_url(const char *url, const char *headers, volatile bool *abort_flag,
+                          InterruptState *interrupt, AVFormatContext **fmt_out) {
+
+    if (!url || url[0] == '\0') {
+        return AVERROR(EINVAL);
+    }
+
+    int last_ret = AVERROR(EIO);
+
+    for (int attempt = 0; attempt < INPUT_OPEN_MAX_RETRIES; attempt++) {
+
+        if (abort_flag && *abort_flag) {
+            return AVERROR(EIO);
+        }
+
+        if (attempt > 0) {
+            av_usleep((unsigned)INPUT_OPEN_RETRY_BASE_US * (unsigned)attempt);
+        }
+
+        int ret = open_input_url_once(url, headers, abort_flag, interrupt, fmt_out);
+
+        if (ret >= 0) {
+            return 0;
+        }
+
+        last_ret = ret;
+    }
+
+    return last_ret;
 }
 
 static void queue_init(PacketQueue *q) {

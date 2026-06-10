@@ -6,9 +6,11 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"streamly/internal/bot"
 	"streamly/internal/config"
+	"streamly/internal/db"
 	"streamly/internal/media"
 	"streamly/internal/pool"
 )
@@ -34,8 +36,22 @@ func main() {
 
 	log.Printf("[pool] streaming accounts ready: %d/%d", p.Size(), len(config.App.UserTokens))
 
+	database, err := db.Connect(ctx, config.App.MongoURI)
+
+	if err != nil {
+
+		log.Fatalf("mongo connect failed: %v", err)
+
+	}
+
+	defer func() {
+		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = database.Close(shutdown)
+	}()
+
 	resolver := media.NewResolver()
-	app, err := bot.New(resolver, p)
+	app, err := bot.New(resolver, p, database)
 
 	if err != nil {
 

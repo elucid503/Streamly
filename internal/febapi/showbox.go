@@ -83,6 +83,85 @@ func NewShowboxClient(options ShowboxOptions) *ShowboxClient {
 
 }
 
+// TopHot returns trending search keywords from Showbox.
+func (c *ShowboxClient) TopHot(mediaType MediaType, pageLimit int) ([]string, error) {
+
+	if mediaType != MediaMovie && mediaType != MediaTV {
+		mediaType = MediaMovie
+	}
+
+	if pageLimit == 0 {
+		pageLimit = 25
+	}
+
+	var keywords []string
+
+	err := c.request("Search_hot", map[string]any{
+		"type":      mediaType,
+		"pagelimit": pageLimit,
+	}, &keywords)
+
+	return keywords, err
+
+}
+
+// TopLists returns curated ranking categories for movies or TV shows.
+func (c *ShowboxClient) TopLists(boxType BoxType) ([]TopList, error) {
+
+	var lists []TopList
+
+	err := c.request("Top_list", map[string]any{"box_type": boxType}, &lists)
+
+	return lists, err
+
+}
+
+// TopListMovies returns titles from a curated movie ranking.
+func (c *ShowboxClient) TopListMovies(listID string, page, pageLimit int) ([]SearchResult, error) {
+
+	if page == 0 {
+		page = 1
+	}
+
+	if pageLimit == 0 {
+		pageLimit = 20
+	}
+
+	var results []SearchResult
+
+	err := c.request("Top_list_movie", map[string]any{
+		"id":        listID,
+		"page":      page,
+		"pagelimit": pageLimit,
+	}, &results)
+
+	return results, err
+
+}
+
+// TopListTV returns titles from a curated TV ranking.
+func (c *ShowboxClient) TopListTV(listID string, page, pageLimit int) ([]SearchResult, error) {
+
+	if page == 0 {
+		page = 1
+	}
+
+	if pageLimit == 0 {
+		pageLimit = 20
+	}
+
+	var results []SearchResult
+
+	err := c.request("Top_list_tv", map[string]any{
+		"id":        listID,
+		"page":      page,
+		"pagelimit": pageLimit,
+	}, &results)
+
+	return results, err
+
+}
+
 // Search queries the catalogue for movies and/or shows matching query.
 func (c *ShowboxClient) Search(query string, mediaType MediaType, page, pageLimit int) ([]SearchResult, error) {
 

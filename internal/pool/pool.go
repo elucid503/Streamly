@@ -147,6 +147,24 @@ func (session *Session) Live() bool {
 
 }
 
+// ActiveInGuild returns any busy stream session in the guild.
+func (p *Pool) ActiveInGuild(guildID string) *Session {
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for _, session := range p.sessions {
+
+		if session.Busy && session.request != nil && session.request.GuildID == guildID {
+			return session
+		}
+
+	}
+
+	return nil
+
+}
+
 func (p *Pool) Active(guildID, channelID string) *Session {
 
 	p.mu.Lock()
@@ -358,45 +376,7 @@ func (p *Pool) stream(ctx context.Context, session *Session, request Request) er
 	}
 
 	if source.IsHlsURL(request.InitialURL) {
-
-		ts, err := transcode.Start(transcode.Request{
-			InputURL: request.InitialURL,
-			Headers:  headers,
-			Caption:  request.Caption,
-			Key:      session.ID,
-			Context:  ctx,
-		})
-
-		if err != nil {
-			return err
-		}
-
-		session.transcodePause = ts.Pause
-		session.transcodeResume = ts.Resume
-
-		if session.Paused {
-			ts.Pause()
-		}
-
-		playErr := streamer.Play(ctx, session.Streamer, ts)
-
-		var transErr error
-
-		select {
-		case transErr = <-ts.Done:
-		case <-time.After(5 * time.Second):
-		}
-
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		if playErr != nil {
-			return playErr
-		}
-
-		return transErr
-
+		return p.playHLS(ctx, session, request, headers)
 	}
 
 	media, err := source.Create(request.ResolveURL, headers, request.InitialURL, session.stats)
@@ -447,6 +427,103 @@ func (p *Pool) stream(ctx context.Context, session *Session, request Request) er
 	}
 
 	return transErr
+
+}
+
+const hlsStartupRetryWindow = 15 * time.Second
+
+func (p *Pool) playHLS(ctx context.Context, session *Session, request Request, headers map[string]string) error {
+
+	url := request.InitialURL
+	var lastErr error
+
+	for attempt := 0; attempt <= config.Download.MaxRetries; attempt++ {
+
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		if attempt > 0 {
+
+			log.Printf(`[stream] HLS retry %d/%d for "%s"`, attempt, config.Download.MaxRetries, request.Caption)
+
+			if request.ResolveURL != nil {
+
+				if fresh, err := request.ResolveURL(); err == nil && fresh != "" {
+					url = fresh
+				}
+
+			}
+
+			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+
+		}
+
+		started := time.Now()
+
+		ts, err := transcode.Start(transcode.Request{
+			InputURL: url,
+			Headers:  headers,
+			Caption:  request.Caption,
+			Key:      session.ID,
+			Context:  ctx,
+		})
+
+		if err != nil {
+			lastErr = err
+
+			if attempt < config.Download.MaxRetries {
+				continue
+			}
+
+			return err
+		}
+
+		session.transcodePause = ts.Pause
+		session.transcodeResume = ts.Resume
+
+		if session.Paused {
+			ts.Pause()
+		}
+
+		playErr := streamer.Play(ctx, session.Streamer, ts)
+
+		var transErr error
+
+		select {
+		case transErr = <-ts.Done:
+		case <-time.After(5 * time.Second):
+		}
+
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		if playErr == nil && transErr == nil {
+			return nil
+		}
+
+		if playErr != nil {
+			lastErr = playErr
+		} else {
+			lastErr = transErr
+		}
+
+		if time.Since(started) >= hlsStartupRetryWindow || attempt >= config.Download.MaxRetries {
+			if playErr != nil {
+				return playErr
+			}
+
+			return transErr
+		}
+
+	}
+
+	if lastErr != nil {
+		return lastErr
+	}
+
+	return nil
 
 }
 

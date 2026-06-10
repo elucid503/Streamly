@@ -21,12 +21,15 @@ import (
 var streamMedia = make(map[string]streamTarget)
 
 type streamTarget struct {
-	ShareKey string
-	FID      int
-	Target   int
-	Label    string
-	Live     bool
-	DaddyID  string
+	ShareKey  string
+	FID       int
+	Target    int
+	Label     string
+	Live      bool
+	DaddyID   string
+	Details   media.TitleDetails
+	Episode   *episodeRef
+	TVChannel *tvapi.Channel
 }
 
 func (b *Bot) onAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -41,10 +44,21 @@ func (b *Bot) onAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreat
 
 	var choices []*discordgo.ApplicationCommandOptionChoice
 
+	choices = append(choices, b.recentSearchChoices(i, query)...)
+
 	tvLimit := 5
 
 	if query != "" {
 		tvLimit = maxOptions
+	}
+
+	if remaining := maxOptions - len(choices); remaining < tvLimit {
+		tvLimit = remaining
+	}
+
+	if tvLimit <= 0 {
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionApplicationCommandAutocompleteResult, Data: &discordgo.InteractionResponseData{Choices: choices}})
+		return
 	}
 
 	tvResults, tvErr := b.Resolver.SearchTV(query, tvLimit)
@@ -96,7 +110,7 @@ func (b *Bot) handleStream(s *discordgo.Session, i *discordgo.InteractionCreate)
 			return
 		}
 
-		b.startLiveStream(s, i, *live)
+		b.startLiveStream(s, i, *live, live.Name, media.TVSelectionValue(live.DaddyID))
 		return
 
 	}
@@ -130,7 +144,7 @@ func (b *Bot) handleStream(s *discordgo.Session, i *discordgo.InteractionCreate)
 			return
 		}
 
-		b.startStream(s, i, details, shareKey, file.FID, nil)
+		b.startStream(s, i, details, shareKey, file.FID, nil, title)
 		return
 
 	}
@@ -231,7 +245,7 @@ func (b *Bot) handleSelect(s *discordgo.Session, i *discordgo.InteractionCreate,
 			details = media.TitleDetails{Title: "Your Selection"}
 		}
 
-		b.startStream(s, i, details, shareKey, fid, &episodeRef{Season: season, Episode: episode})
+		b.startStream(s, i, details, shareKey, fid, &episodeRef{Season: season, Episode: episode}, fmt.Sprintf("%d:%d", febapi.BoxSeries, id))
 
 	}
 
@@ -242,7 +256,7 @@ type episodeRef struct {
 	Episode int
 }
 
-func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, details media.TitleDetails, shareKey string, fid int, episode *episodeRef) {
+func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, details media.TitleDetails, shareKey string, fid int, episode *episodeRef, historyValue string) {
 
 	channel := memberVoiceChannel(s, i)
 
@@ -291,7 +305,14 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 
 	caption := overlayCaption(details.Title, episode)
 
-	streamMedia[session.ID] = streamTarget{ShareKey: shareKey, FID: fid, Target: target, Label: label}
+	streamMedia[session.ID] = streamTarget{
+		ShareKey: shareKey,
+		FID:      fid,
+		Target:   target,
+		Label:    label,
+		Details:  details,
+		Episode:  episode,
+	}
 
 	targetCopy := streamMedia[session.ID]
 
@@ -328,6 +349,7 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 	embed := streamingEmbed(details, channel.ID, episode)
 	components := controlRow(session.ID, false, false)
 	editMessage(s, i, &discordgo.WebhookEdit{Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}), Components: ptrComponents(components)})
+	b.recordHistory(i, details.Title, historyValue)
 
 }
 
@@ -357,7 +379,7 @@ func (b *Bot) resolveLiveTV(title string) (*tvapi.Channel, error) {
 
 }
 
-func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCreate, channel tvapi.Channel) {
+func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCreate, channel tvapi.Channel, historyTitle, historyValue string) {
 
 	voice := memberVoiceChannel(s, i)
 
@@ -385,7 +407,14 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 	caption := truncate(channel.Name, 53)
 	daddyID := channel.DaddyID
 
-	streamMedia[session.ID] = streamTarget{Live: true, DaddyID: daddyID, Label: "Live"}
+	tvChannel := channel
+	streamMedia[session.ID] = streamTarget{
+		Live:      true,
+		DaddyID:   daddyID,
+		Label:     "Live",
+		Details:   details,
+		TVChannel: &tvChannel,
+	}
 
 	err = b.Pool.Play(context.Background(), session, pool.Request{
 		GuildID:      voice.GuildID,
@@ -422,6 +451,7 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 	embed := liveStreamingEmbed(details, channel, voice.ID)
 	components := controlRow(session.ID, false, true)
 	editMessage(s, i, &discordgo.WebhookEdit{Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}), Components: ptrComponents(components)})
+	b.recordHistory(i, historyTitle, historyValue)
 
 }
 

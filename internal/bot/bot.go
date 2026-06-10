@@ -6,6 +6,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 
 	"streamly/internal/config"
+	"streamly/internal/db"
 	"streamly/internal/media"
 	"streamly/internal/pool"
 )
@@ -15,9 +16,10 @@ type Bot struct {
 	Session  *discordgo.Session
 	Resolver *media.Resolver
 	Pool     *pool.Pool
+	DB       *db.Client
 }
 
-func New(resolver *media.Resolver, p *pool.Pool) (*Bot, error) {
+func New(resolver *media.Resolver, p *pool.Pool, database *db.Client) (*Bot, error) {
 
 	session, err := discordgo.New("Bot " + config.App.DiscordToken)
 
@@ -27,7 +29,7 @@ func New(resolver *media.Resolver, p *pool.Pool) (*Bot, error) {
 
 	session.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildVoiceStates
 
-	bot := &Bot{Session: session, Resolver: resolver, Pool: p}
+	bot := &Bot{Session: session, Resolver: resolver, Pool: p, DB: database}
 
 	session.AddHandler(bot.onInteraction)
 
@@ -55,6 +57,9 @@ func (b *Bot) registerCommands() error {
 		{Name: "resume", Description: "Resume the paused stream in your call."},
 		{Name: "stop", Description: "Stop the active stream in your call."},
 		{Name: "stats", Description: "Show stats for the active stream in your call."},
+		{Name: "channels", Description: "Browse live TV channels and pick one to watch."},
+		{Name: "top", Description: "See trending movies and TV shows to watch."},
+		{Name: "now", Description: "See what is streaming in this server."},
 	}
 
 	for _, command := range commands {
@@ -111,6 +116,12 @@ func (b *Bot) onCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		b.handleControl(s, i, "stop")
 	case "stats":
 		b.handleStats(s, i)
+	case "channels":
+		b.handleChannels(s, i)
+	case "top":
+		b.handleTop(s, i)
+	case "now":
+		b.handleNow(s, i)
 	default:
 		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Content: "Unknown command."}})
 	}
@@ -122,17 +133,22 @@ func (b *Bot) onComponent(s *discordgo.Session, i *discordgo.InteractionCreate) 
 	customID := i.MessageComponentData().CustomID
 	parts := splitCustomID(customID)
 
-	if len(parts) < 2 || parts[0] != "stream" {
+	if len(parts) < 2 {
 		return
 	}
 
-	switch parts[1] {
-	case "stop":
-		b.handleStopButton(s, i, parts)
-	case "pause", "resume":
-		b.handleToggleButton(s, i, parts)
-	case "season", "episode":
-		b.handleSelect(s, i, parts)
+	switch parts[0] {
+	case "stream":
+		switch parts[1] {
+		case "stop":
+			b.handleStopButton(s, i, parts)
+		case "pause", "resume":
+			b.handleToggleButton(s, i, parts)
+		case "season", "episode":
+			b.handleSelect(s, i, parts)
+		}
+	case "channels":
+		b.handleChannelsComponent(s, i, parts)
 	}
 
 }

@@ -19,6 +19,7 @@ type Config struct {
 	UserTokens   []string // Selfbot tokens; one streaming slot each.
 	GuildID      string   // When set, slash commands register instantly to this guild.
 	FebboxCookie string   // The `ui` cookie used to fetch Febbox media.
+	MongoURI     string   // MongoDB connection string for Streamly persistence.
 }
 
 // StreamOptions holds libav transcode targets for every stream.
@@ -65,6 +66,7 @@ func init() {
 		UserTokens:   parseTokens(os.Getenv("USER_TOKENS")),
 		GuildID:      os.Getenv("GUILD_ID"),
 		FebboxCookie: required("FEBBOX_UI_COOKIE"),
+		MongoURI:     required("MONGO_URI"),
 	}
 
 	Stream = StreamOptions{
