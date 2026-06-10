@@ -36,7 +36,7 @@ func (b *Bot) handleStats(s *discordgo.Session, i *discordgo.InteractionCreate) 
 			{Name: "Uptime", Value: formatDuration(stats.UptimeMs), Inline: true},
 			{Name: "Channel", Value: channelLabel(stats.ChannelID), Inline: true},
 			{Name: "Position", Value: positionField, Inline: true},
-			{Name: "Memory", Value: formatBytes(memoryRSS()), Inline: true},
+			{Name: "Memory", Value: memoryUsageLabel(), Inline: true},
 			{Name: "Quality", Value: fallbackCaption(stats.QualityLabel, "Auto"), Inline: true},
 			{Name: "Bytes Read", Value: formatBytes(stats.BytesRead), Inline: true},
 			{Name: "Subtitles", Value: subtitlesLabel(stats), Inline: true},
@@ -96,11 +96,11 @@ func fallbackCaption(value, fallback string) string {
 
 }
 
-func memoryRSS() int64 {
+func memoryUsageLabel() string {
 
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
 
-	return int64(mem.Sys)
+	return fmt.Sprintf("%s in use / %s reserved", formatBytes(int64(mem.HeapInuse)), formatBytes(int64(mem.Sys)))
 
 }

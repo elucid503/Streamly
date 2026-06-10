@@ -23,6 +23,8 @@ type Packet struct {
 	Data     []byte
 	PTS      time.Duration
 	Duration time.Duration
+
+	dataRef *[]byte // Pooled backing store; returned via ReleasePacket.
 }
 
 // InputReader is a byte-seekable media input; Size returns total bytes or -1 when unknown.

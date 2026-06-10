@@ -768,11 +768,15 @@ func (m *MediaPeer) negotiate() {
 
 	if err := peer.AddAudioTrack(uint32(m.audioSSRC), CodecOpus.PayloadType); err != nil {
 		log.Printf("[streamer] audio track: %v", err)
+		m.peer.Store(nil)
+		peer.Destroy()
 		return
 	}
 
 	if err := peer.AddVideoTrack(uint32(m.videoSSRC), uint32(m.rtxSSRC), CodecH264.PayloadType, CodecH264.RtxPayloadType); err != nil {
 		log.Printf("[streamer] video track: %v", err)
+		m.peer.Store(nil)
+		peer.Destroy()
 		return
 	}
 

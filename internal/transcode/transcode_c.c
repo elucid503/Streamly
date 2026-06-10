@@ -51,6 +51,7 @@ typedef struct PacketQueue {
     int count;
     bool done;
     int exit_code;
+    bool initialized;
 } PacketQueue;
 
 typedef struct CbIO {
@@ -328,10 +329,15 @@ static void queue_init(PacketQueue *q) {
     q->count = 0;
     q->done = false;
     q->exit_code = 0;
+    q->initialized = true;
 
 }
 
 static void queue_destroy(PacketQueue *q) {
+
+    if (!q || !q->initialized) {
+        return;
+    }
 
     pthread_mutex_lock(&q->lock);
 
@@ -346,6 +352,7 @@ static void queue_destroy(PacketQueue *q) {
     pthread_mutex_unlock(&q->lock);
     pthread_mutex_destroy(&q->lock);
     pthread_cond_destroy(&q->cond);
+    q->initialized = false;
 
 }
 
@@ -848,6 +855,7 @@ static void *muxed_reader_thread(void *arg) {
         }
 
         if (ret < 0) {
+            av_packet_free(&pkt);
             break;
         }
     }

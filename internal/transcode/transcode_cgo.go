@@ -96,15 +96,10 @@ func streamlyTranscodeEmit(user C.uintptr_t, kind C.int, data *C.uint8_t, length
 		return
 	}
 
-	n := int(length)
-	payload := C.GoBytes(unsafe.Pointer(data), C.int(n))
-
-	packet := Packet{
-		Kind:     KindVideo,
-		Data:     payload,
-		PTS:      time.Duration(int64(ptsMs)) * time.Millisecond,
-		Duration: time.Duration(int64(durMs)) * time.Millisecond,
-	}
+	packet := packetFromC(unsafe.Pointer(data), int(length))
+	packet.Kind = KindVideo
+	packet.PTS = time.Duration(int64(ptsMs)) * time.Millisecond
+	packet.Duration = time.Duration(int64(durMs)) * time.Millisecond
 
 	channel := target.video
 
@@ -114,7 +109,7 @@ func streamlyTranscodeEmit(user C.uintptr_t, kind C.int, data *C.uint8_t, length
 		channel = target.audio
 
 		if packet.Duration <= 0 {
-			packet.Duration = opusPacketDuration(payload)
+			packet.Duration = opusPacketDuration(packet.Data)
 		}
 
 	}

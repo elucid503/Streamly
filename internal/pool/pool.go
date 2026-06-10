@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"runtime"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -489,6 +491,10 @@ func (p *Pool) Release(session *Session) {
 	session.Busy = false
 	session.Paused = false
 	session.StopRequested = false
+
+	// Encourage the runtime and native heaps to give pages back after a long transcode session.
+	runtime.GC()
+	debug.FreeOSMemory()
 
 }
 

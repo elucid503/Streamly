@@ -17,13 +17,13 @@ type gateway struct {
 	client *Client
 	conn   *websocket.Conn
 
-	mu          sync.Mutex
-	sessionID   string
-	sequence    int
-	hasSequence bool
-	heartbeat   *time.Ticker
-	lastBeatAck bool
-	identified  chan error
+	mu              sync.Mutex
+	sessionID       string
+	sequence        int
+	hasSequence     bool
+	heartbeatCancel context.CancelFunc
+	lastBeatAck     bool
+	identified      chan error
 }
 
 func newGateway(client *Client) *gateway {
@@ -162,24 +162,35 @@ func (g *gateway) onHello(data json.RawMessage) {
 
 	_ = json.Unmarshal(data, &hello)
 
-	if g.heartbeat != nil {
-		g.heartbeat.Stop()
+	if g.heartbeatCancel != nil {
+		g.heartbeatCancel()
 	}
 
-	g.heartbeat = time.NewTicker(time.Duration(hello.HeartbeatInterval) * time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	g.heartbeatCancel = cancel
 
 	go func() {
 
-		for range g.heartbeat.C {
+		ticker := time.NewTicker(time.Duration(hello.HeartbeatInterval) * time.Millisecond)
+		defer ticker.Stop()
 
-			if !g.lastBeatAck {
-				log.Printf("[selfbot] heartbeat not acknowledged; closing zombie connection")
-				g.close()
+		for {
+
+			select {
+			case <-ctx.Done():
 				return
-			}
+			case <-ticker.C:
 
-			g.lastBeatAck = false
-			_ = g.send(opHeartbeat, g.heartbeatPayload())
+				if !g.lastBeatAck {
+					log.Printf("[selfbot] heartbeat not acknowledged; closing zombie connection")
+					g.close()
+					return
+				}
+
+				g.lastBeatAck = false
+				_ = g.send(opHeartbeat, g.heartbeatPayload())
+
+			}
 
 		}
 
@@ -254,9 +265,9 @@ func (g *gateway) close() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if g.heartbeat != nil {
-		g.heartbeat.Stop()
-		g.heartbeat = nil
+	if g.heartbeatCancel != nil {
+		g.heartbeatCancel()
+		g.heartbeatCancel = nil
 	}
 
 	if g.conn != nil {

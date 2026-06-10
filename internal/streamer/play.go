@@ -224,6 +224,7 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 			}
 
 			if !ts.WaitIfPaused(ctx) {
+				transcode.ReleasePacket(packet)
 				return ctx.Err()
 			}
 
@@ -236,6 +237,7 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 			}
 
 			if !s.clock.wait(ctx, packet.PTS, delay) {
+				transcode.ReleasePacket(packet)
 				return ctx.Err()
 			}
 
@@ -250,6 +252,7 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 			peer, err := s.resolvePeer(ctx)
 
 			if err != nil {
+				transcode.ReleasePacket(packet)
 				return err
 			}
 
@@ -264,6 +267,7 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 				if late := s.clock.lateness(packet.PTS); late > audioCorrectionThreshold {
 					peer.advanceAudio(duration)
 					s.markRTP()
+					transcode.ReleasePacket(packet)
 
 					continue
 				}
@@ -271,6 +275,8 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 				peer.sendAudio(packet.Data, duration)
 				s.markRTP()
 			}
+
+			transcode.ReleasePacket(packet)
 
 		}
 
@@ -337,10 +343,19 @@ func (c *mediaClock) wait(ctx context.Context, pts time.Duration, extraDelay tim
 		return true
 	}
 
+	timer := time.NewTimer(sleep)
+
 	select {
 	case <-ctx.Done():
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+
 		return false
-	case <-time.After(sleep):
+	case <-timer.C:
 		return true
 	}
 
