@@ -5,8 +5,10 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 
+	"streamly/internal/captions"
 	"streamly/internal/config"
 	"streamly/internal/db"
+	"streamly/internal/febapi"
 	"streamly/internal/introdb"
 	"streamly/internal/media"
 	"streamly/internal/pool"
@@ -19,6 +21,7 @@ type Bot struct {
 	Pool     *pool.Pool
 	DB       *db.Client
 	IntroDB  *introdb.Client
+	Captions *captions.Fetcher
 }
 
 func New(resolver *media.Resolver, p *pool.Pool, database *db.Client) (*Bot, error) {
@@ -31,7 +34,18 @@ func New(resolver *media.Resolver, p *pool.Pool, database *db.Client) (*Bot, err
 
 	session.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildVoiceStates
 
-	bot := &Bot{Session: session, Resolver: resolver, Pool: p, DB: database, IntroDB: introdb.NewClient(introdb.ClientOptions{APIKey: config.App.IntroDBAPIKey})}
+	subtitleProviders := []captions.RemoteProvider{
+		captions.NewSubDLClient(captions.SubDLOptions{APIKey: config.App.SubDLAPIKey}),
+	}
+
+	bot := &Bot{
+		Session:  session,
+		Resolver: resolver,
+		Pool:     p,
+		DB:       database,
+		IntroDB:  introdb.NewClient(introdb.ClientOptions{APIKey: config.App.IntroDBAPIKey}),
+		Captions: captions.NewFetcher(febapi.NewFebboxClient(febapi.FebboxOptions{Cookie: config.App.FebboxCookie}), subtitleProviders, config.FebboxStreamHeaders()),
+	}
 
 	session.AddHandler(bot.onInteraction)
 
@@ -61,6 +75,12 @@ func (b *Bot) registerCommands() error {
 			{Type: discordgo.ApplicationCommandOptionString, Name: "position", Description: "Enter a time to jump to (eg: 4:20 or +30).", Required: true, Autocomplete: true},
 		}},
 		{Name: "skip-intro", Description: "Skip past the intro in the active stream."},
+		{Name: "subtitles", Description: "Turn English subtitles on or off for the active stream.", Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "mode", Description: "Whether subtitles should be shown on stream.", Required: true, Choices: []*discordgo.ApplicationCommandOptionChoice{
+				{Name: "Enabled", Value: subtitleModeEnabled},
+				{Name: "Disabled", Value: subtitleModeDisabled},
+			}},
+		}},
 		{Name: "stop", Description: "Stop the active stream in your call."},
 		{Name: "stats", Description: "Show stats for the active stream in your call."},
 		{Name: "channels", Description: "Browse live TV channels and pick one to watch."},
@@ -90,12 +110,7 @@ func (b *Bot) registerCommands() error {
 		scope = "to guild " + config.App.GuildID
 	}
 
-	introdbStatus := "TheIntroDB unauthenticated"
-	if config.App.IntroDBAPIKey != "" {
-		introdbStatus = "TheIntroDB API key configured"
-	}
-
-	log.Printf("[startup] logged in as %s; %d commands registered %s; %s.", b.Session.State.User.Username, len(commands), scope, introdbStatus)
+	log.Printf("[startup] logged in as %s; %d commands registered %s.", b.Session.State.User.Username, len(commands), scope)
 
 	return nil
 
@@ -127,6 +142,8 @@ func (b *Bot) onCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		b.handleSeek(s, i)
 	case "skip-intro":
 		b.handleSkipIntro(s, i)
+	case "subtitles":
+		b.handleSubtitles(s, i)
 	case "stop":
 		b.handleControl(s, i, "stop")
 	case "stats":

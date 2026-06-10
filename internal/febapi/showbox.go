@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -52,6 +53,13 @@ var baseParams = struct {
 
 const requestTTLSeconds = 60 * 60 * 12 // How long a signed request stays valid, in seconds (currently 12 hours).
 
+const searchCacheTTL = 60 * time.Minute
+
+type searchCacheEntry struct {
+	results []SearchResult
+	expires time.Time
+}
+
 // ShowboxOptions tunes a ShowboxClient instance.
 type ShowboxOptions struct {
 	ChildMode string // Showbox "child mode" flag. Defaults to CHILD_MODE env or "0".
@@ -59,8 +67,10 @@ type ShowboxOptions struct {
 
 // ShowboxClient talks to the Showbox catalogue: search, title details, and resolving the Febbox share that hosts the media.
 type ShowboxClient struct {
-	childMode string
-	client    *http.Client
+	childMode   string
+	client      *http.Client
+	searchMu    sync.RWMutex
+	searchCache map[string]searchCacheEntry
 }
 
 // NewShowboxClient builds a ShowboxClient with optional overrides.
@@ -77,8 +87,9 @@ func NewShowboxClient(options ShowboxOptions) *ShowboxClient {
 	}
 
 	return &ShowboxClient{
-		childMode: childMode,
-		client:    &http.Client{},
+		childMode:   childMode,
+		client:      &http.Client{},
+		searchCache: make(map[string]searchCacheEntry),
 	}
 
 }
@@ -162,6 +173,12 @@ func (c *ShowboxClient) TopListTV(listID string, page, pageLimit int) ([]SearchR
 
 }
 
+func searchCacheKey(query string, mediaType MediaType, page, pageLimit int) string {
+
+	return fmt.Sprintf("%s|%s|%d|%d", strings.ToLower(strings.TrimSpace(query)), mediaType, page, pageLimit)
+
+}
+
 // Search queries the catalogue for movies and/or shows matching query.
 func (c *ShowboxClient) Search(query string, mediaType MediaType, page, pageLimit int) ([]SearchResult, error) {
 
@@ -177,6 +194,17 @@ func (c *ShowboxClient) Search(query string, mediaType MediaType, page, pageLimi
 		pageLimit = 20
 	}
 
+	key := searchCacheKey(query, mediaType, page, pageLimit)
+
+	c.searchMu.RLock()
+
+	if entry, ok := c.searchCache[key]; ok && time.Now().Before(entry.expires) {
+		c.searchMu.RUnlock()
+		return append([]SearchResult(nil), entry.results...), nil
+	}
+
+	c.searchMu.RUnlock()
+
 	var results []SearchResult
 
 	err := c.request("Search5", map[string]any{
@@ -186,7 +214,18 @@ func (c *ShowboxClient) Search(query string, mediaType MediaType, page, pageLimi
 		"pagelimit": pageLimit,
 	}, &results)
 
-	return results, err
+	if err != nil {
+		return nil, err
+	}
+
+	c.searchMu.Lock()
+	c.searchCache[key] = searchCacheEntry{
+		results: append([]SearchResult(nil), results...),
+		expires: time.Now().Add(searchCacheTTL),
+	}
+	c.searchMu.Unlock()
+
+	return results, nil
 
 }
 

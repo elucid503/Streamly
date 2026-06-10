@@ -83,7 +83,7 @@ func (c *TVClient) ListChannels() (*ChannelCatalog, error) {
 
 	u := c.baseURL + channelsPath
 
-	response, err := c.client.Get(u)
+	response, err := c.get(u)
 
 	if err != nil {
 
@@ -127,7 +127,7 @@ func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
 
 	u := c.baseURL + resolvePathPrefix + url.PathEscape(daddyID)
 
-	response, err := c.client.Get(u)
+	response, err := c.get(u)
 
 	if err != nil {
 
@@ -142,6 +142,18 @@ func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
 	if err != nil {
 
 		return "", fmt.Errorf("read resolve response: %w", err)
+
+	}
+
+	if response.StatusCode != http.StatusOK {
+
+		msg := strings.TrimSpace(string(body))
+
+		if msg == "" {
+			msg = response.Status
+		}
+
+		return "", fmt.Errorf("resolve stream: status %d: %s", response.StatusCode, msg)
 
 	}
 
@@ -228,5 +240,24 @@ func (c *TVClient) storeCatalog(catalog *ChannelCatalog) {
 
 	c.catalog = catalog
 	c.catalogAt = time.Now()
+
+}
+
+const tvBrowserUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+	"(KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
+
+func (c *TVClient) get(rawURL string) (*http.Response, error) {
+
+	request, err := http.NewRequest(http.MethodGet, rawURL, nil)
+
+	if err != nil {
+		return nil, err
+	}
+
+	request.Header.Set("User-Agent", tvBrowserUA)
+	request.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	request.Header.Set("Referer", c.baseURL+"/")
+
+	return c.client.Do(request)
 
 }

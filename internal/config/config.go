@@ -20,7 +20,8 @@ type Config struct {
 	GuildID      string   // When set, slash commands register instantly to this guild.
 	FebboxCookie  string // The `ui` cookie used to fetch Febbox media.
 	MongoURI      string // MongoDB connection string for Streamly persistence.
-	IntroDBAPIKey string // Optional bearer token for TheIntroDB reads.
+	IntroDBAPIKey          string // Optional bearer token for TheIntroDB reads.
+	SubDLAPIKey string // Subtitle provider; free tier allows 2,000 searches/day.
 }
 
 // StreamOptions holds libav transcode targets for every stream.
@@ -39,23 +40,13 @@ type StreamOptions struct {
 type DownloadOptions struct {
 	RequestTimeoutMs int // Abort a fetch whose headers or next chunk do not arrive in time.
 	MaxRetries       int // Consecutive failed re-resolves before the source gives up.
-}
-
-// OverlayOptions configures the bottom-right watermark and caption.
-type OverlayOptions struct {
-	LogoPath  string  // PNG drawn above the caption; overlay is skipped if absent.
-	FontPath  string  // TTF used for the caption; overlay is skipped if absent.
-	LogoWidth int     // Logo width in pixels; height scales to keep aspect ratio.
-	FontSize  int     // Caption font size in pixels.
-	Opacity   float64 // Shared alpha for logo and caption (0..1).
-	Margin    int     // Inset from the bottom-right corner in pixels.
+	LiveBufferSec    int // Live HLS cushion kept ahead of playback; 0 disables throttling.
 }
 
 var (
 	App      Config
 	Stream   StreamOptions
 	Download DownloadOptions
-	Overlay  OverlayOptions
 )
 
 func init() {
@@ -68,7 +59,8 @@ func init() {
 		GuildID:      os.Getenv("GUILD_ID"),
 		FebboxCookie:  required("FEBBOX_UI_COOKIE"),
 		MongoURI:      required("MONGO_URI"),
-		IntroDBAPIKey: envString("INTRODB_API_KEY", ""),
+		IntroDBAPIKey:         envString("INTRODB_API_KEY", ""),
+		SubDLAPIKey: envString("SUBDL_API_KEY", ""),
 	}
 
 	Stream = StreamOptions{
@@ -85,15 +77,7 @@ func init() {
 	Download = DownloadOptions{
 		RequestTimeoutMs: envInt("STREAM_READ_TIMEOUT_MS", 30000),
 		MaxRetries:       envInt("STREAM_MAX_RESUME_ATTEMPTS", 5),
-	}
-
-	Overlay = OverlayOptions{
-		LogoPath:  envString("STREAM_LOGO_PATH", "assets/logo.png"),
-		FontPath:  envString("STREAM_FONT_PATH", "assets/font.ttf"),
-		LogoWidth: envInt("STREAM_LOGO_WIDTH", 48),
-		FontSize:  envInt("STREAM_LOGO_FONT_SIZE", 14),
-		Opacity:   envFloat("STREAM_LOGO_OPACITY", 0.25),
-		Margin:    envInt("STREAM_LOGO_MARGIN", 24),
+		LiveBufferSec:    envInt("LIVE_HLS_BUFFER_SEC", 10),
 	}
 
 }
@@ -109,12 +93,26 @@ func FebboxStreamHeaders() map[string]string {
 
 }
 
+// TVBaseURL returns the live TV site origin used for API calls and Referer headers.
+func TVBaseURL() string {
+
+	base := strings.TrimSpace(os.Getenv("TV_BASE_URL"))
+
+	if base == "" {
+		return "https://dami-tv.pro"
+	}
+
+	return strings.TrimRight(base, "/")
+
+}
+
 // TVStreamHeaders presents a browser tab for proxied live TV HLS playlists.
 func TVStreamHeaders() map[string]string {
 
 	return map[string]string{
 		"User-Agent":      browserUA,
 		"Accept-Language": "en-US,en;q=0.9",
+		"Referer":         TVBaseURL() + "/",
 	}
 
 }
@@ -198,24 +196,6 @@ func envInt(name string, fallback int) int {
 	}
 
 	value, err := strconv.Atoi(raw)
-
-	if err != nil {
-		return fallback
-	}
-
-	return value
-
-}
-
-func envFloat(name string, fallback float64) float64 {
-
-	raw := strings.TrimSpace(os.Getenv(name))
-
-	if raw == "" {
-		return fallback
-	}
-
-	value, err := strconv.ParseFloat(raw, 64)
 
 	if err != nil {
 		return fallback

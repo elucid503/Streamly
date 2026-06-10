@@ -23,7 +23,7 @@ typedef int64_t (*streamly_seek_cb)(uintptr_t user, int64_t offset, int whence);
 // streamly_meta_cb reports the container duration in ms (or -1 when unknown) once probing finishes.
 typedef void (*streamly_meta_cb)(uintptr_t user, int64_t duration_ms);
 
-// transcode_params_t mirrors config.Stream and config.Overlay for the libav pipeline.
+// transcode_params_t mirrors config.Stream for the libav pipeline.
 typedef struct {
     int width;                  // Output frame width.
     int height;                 // Output frame height.
@@ -33,14 +33,8 @@ typedef struct {
     int bitrate_audio_k;        // Opus bitrate in kbps.
     int threads;                // Encoder thread cap; 0 lets libav decide.
 
-    bool overlay;               // Burn logo + caption when assets exist.
-    const char *logo_path;      // PNG watermark path.
-    const char *font_path;      // TTF for drawtext.
-    const char *caption_file;   // Temp text file for drawtext textfile=; may be NULL.
-    int logo_width;             // Logo width in pixels.
-    int font_size;              // Caption font size.
-    float opacity;              // Shared alpha for logo and caption.
-    int margin;                 // Bottom-right inset in pixels.
+    const char *subtitle_path;  // External SRT/VTT/ASS for the subtitles filter; NULL disables burn-in.
+    const char *fonts_dir;      // Directory passed to libass fontsdir=; NULL uses libass defaults.
 
     streamly_read_cb read_cb;   // Byte-seekable Go media source; NULL when input_url is set.
     streamly_seek_cb seek_cb;   // Byte seek into the Go media source; enables av_seek_frame.

@@ -11,7 +11,10 @@ import (
 	"streamly/internal/pool"
 )
 
-const maxOptions = 25
+const (
+	maxOptions = 25
+	embedColor = 0x96BEFF
+)
 
 func truncate(text string, max int) string {
 
@@ -32,7 +35,7 @@ func baseEmbed(details media.TitleDetails, header string) *discordgo.MessageEmbe
 	}
 
 	embed := &discordgo.MessageEmbed{
-		Color:  0x5865f2,
+		Color:  embedColor,
 		Author: &discordgo.MessageEmbedAuthor{Name: header},
 		Title:  title,
 	}
@@ -52,7 +55,7 @@ func baseEmbed(details media.TitleDetails, header string) *discordgo.MessageEmbe
 func simpleEmbed(header, title, description string) *discordgo.MessageEmbed {
 
 	return &discordgo.MessageEmbed{
-		Color:       0x5865f2,
+		Color:       embedColor,
 		Author:      &discordgo.MessageEmbedAuthor{Name: header},
 		Title:       title,
 		Description: description,

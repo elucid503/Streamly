@@ -93,7 +93,7 @@ func (b *Bot) handleChannelsComponent(s *discordgo.Session, i *discordgo.Interac
 func channelsEmbed(channels []tvapi.Channel, page, totalPages int) *discordgo.MessageEmbed {
 
 	embed := &discordgo.MessageEmbed{
-		Color:  0x5865f2,
+		Color:  embedColor,
 		Title:  "Channels",
 		Footer: &discordgo.MessageEmbedFooter{Text: fmt.Sprintf("Page %d of %d", page, totalPages)},
 	}

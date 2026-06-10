@@ -23,6 +23,7 @@ var streamMedia = make(map[string]streamTarget)
 type streamTarget struct {
 	ShareKey  string
 	FID       int
+	VideoName string
 	Target    int
 	Label     string
 	Live      bool
@@ -149,7 +150,7 @@ func (b *Bot) handleStream(s *discordgo.Session, i *discordgo.InteractionCreate)
 			return
 		}
 
-		b.startStream(s, i, details, shareKey, file.FID, nil, title)
+		b.startStream(s, i, details, shareKey, file.FID, file.FileName, nil, title)
 		return
 
 	}
@@ -250,7 +251,8 @@ func (b *Bot) handleSelect(s *discordgo.Session, i *discordgo.InteractionCreate,
 			details = media.TitleDetails{Title: "Your Selection"}
 		}
 
-		b.startStream(s, i, details, shareKey, fid, &episodeRef{Season: season, Episode: episode}, fmt.Sprintf("%d:%d", febapi.BoxSeries, id))
+		videoName := b.Resolver.FileName(shareKey, fid)
+		b.startStream(s, i, details, shareKey, fid, videoName, &episodeRef{Season: season, Episode: episode}, fmt.Sprintf("%d:%d", febapi.BoxSeries, id))
 
 	}
 
@@ -261,7 +263,7 @@ type episodeRef struct {
 	Episode int
 }
 
-func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, details media.TitleDetails, shareKey string, fid int, episode *episodeRef, historyValue string) {
+func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, details media.TitleDetails, shareKey string, fid int, videoName string, episode *episodeRef, historyValue string) {
 
 	channel := memberVoiceChannel(s, i)
 
@@ -278,20 +280,22 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 	}
 
 	qualities, _ := b.Resolver.Qualities(shareKey, fid)
-	selected := media.PickQuality(qualities, config.Stream.Height)
-
-	url := ""
-
-	if selected != nil {
-		url = selected.URL
-	}
 
 	target := config.Stream.Height
 	label := fmt.Sprintf("%dp", config.Stream.Height)
 
+	selected := media.PickQuality(qualities, target)
+
 	if selected != nil {
 		target = media.QualityHeight(*selected)
 		label = qualityLabel(*selected)
+	}
+
+	ranked := media.RankedQualityURLs(qualities, target)
+	url := ""
+
+	if len(ranked) > 0 {
+		url = ranked[0]
 	}
 
 	if url == "" {
@@ -311,12 +315,13 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 	caption := overlayCaption(details.Title, episode)
 
 	streamMedia[session.ID] = streamTarget{
-		ShareKey: shareKey,
-		FID:      fid,
-		Target:   target,
-		Label:    label,
-		Details:  details,
-		Episode:  episode,
+		ShareKey:  shareKey,
+		FID:       fid,
+		VideoName: videoName,
+		Target:    target,
+		Label:     label,
+		Details:   details,
+		Episode:   episode,
 	}
 
 	targetCopy := streamMedia[session.ID]
@@ -329,6 +334,22 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 		QualityLabel: label,
 		ResolveURL: func() (string, error) {
 			return b.Resolver.StreamURL(targetCopy.ShareKey, targetCopy.FID, streamMedia[session.ID].Target)
+		},
+		QualityURL: func(attempt int) (string, error) {
+			target := streamMedia[session.ID]
+			qualities, err := b.Resolver.Qualities(target.ShareKey, target.FID)
+
+			if err != nil {
+				return "", err
+			}
+
+			urls := media.RankedQualityURLs(qualities, target.Target)
+
+			if attempt >= len(urls) {
+				return "", fmt.Errorf("no more quality fallbacks")
+			}
+
+			return urls[attempt], nil
 		},
 		OnClose: func(reason pool.CloseReason) {
 			if reason == pool.CloseStopped {
@@ -659,9 +680,10 @@ func minInt(a, b int) int {
 }
 
 type episode struct {
-	FID    int
-	Number int
-	Name   string
+	FID      int
+	Number   int
+	Name     string
+	FileName string
 }
 
 func seasonRow(id int, shareKey string, seasons []febapi.FebboxFile) discordgo.ActionsRow {
@@ -693,14 +715,8 @@ func episodeRow(id int, shareKey string, season int, episodes []episode) discord
 
 	for _, ep := range episodes {
 
-		label := fmt.Sprintf("Episode %d", ep.Number)
-
-		if ep.Name != "" {
-			label = fmt.Sprintf("E%d • %s", ep.Number, ep.Name)
-		}
-
 		options = append(options, discordgo.SelectMenuOption{
-			Label: truncate(label, 100),
+			Label: fmt.Sprintf("Episode %d", ep.Number),
 			Value: fmt.Sprintf("%d:%d", ep.FID, ep.Number),
 		})
 
@@ -764,8 +780,12 @@ func toEpisodes(files []febapi.FebboxFile, season int, details *media.TitleDetai
 			name = episodeName(file.FileName, number)
 		}
 
-		if _, exists := byNumber[number]; !exists {
-			byNumber[number] = episode{FID: file.FID, Number: number, Name: name}
+		candidate := episode{FID: file.FID, Number: number, Name: name, FileName: file.FileName}
+
+		if existing, exists := byNumber[number]; !exists {
+			byNumber[number] = candidate
+		} else if media.StreamFilePreference(candidate.FileName) > media.StreamFilePreference(existing.FileName) {
+			byNumber[number] = candidate
 		}
 
 	}

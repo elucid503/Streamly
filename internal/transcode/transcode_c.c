@@ -24,6 +24,14 @@
 #define INPUT_OPEN_MAX_RETRIES 5
 #define INPUT_OPEN_RETRY_BASE_US 300000
 
+// Burned-in subtitle styling (libass force_style).
+#define SUBTITLE_FORCE_STYLE \
+    "FontSize=11,Spacing=0.2,Alignment=2,MarginV=14,BorderStyle=1,Outline=0," \
+    "Shadow=1,BackColour=&H90000000,PrimaryColour=&H00FFFFFF"
+
+// Force 8-bit yuv420p before x264. Avoid colorspace filter: it aborts on unknown primaries.
+#define VIDEO_SCALE_CHAIN "scale=%d:%d:flags=lanczos,format=yuv420p,fps=%d"
+
 // Suppress libav warnings globally before any goroutine can call into libav.
 // The per-session av_log_set_level in transcode_run is a belt-and-suspenders fallback.
 __attribute__((constructor)) static void init_av_log(void) {
@@ -535,37 +543,35 @@ static int build_filter_graph(const transcode_params_t *params, AVCodecContext *
 
     char chain[4096];
 
-    if (!params->overlay) {
+    if (params->subtitle_path && params->subtitle_path[0] != '\0') {
 
-        snprintf(chain, sizeof(chain), "[in]scale=%d:%d,fps=%d[out]",
-                 params->width, params->height, params->frame_rate);
+        char subs[1024];
+        char fonts[1024];
+
+        filter_escape(subs, sizeof(subs), params->subtitle_path);
+
+        if (params->fonts_dir && params->fonts_dir[0] != '\0') {
+            filter_escape(fonts, sizeof(fonts), params->fonts_dir);
+            snprintf(chain, sizeof(chain),
+                     "[in]" VIDEO_SCALE_CHAIN "[base];"
+                     "[base]subtitles=filename='%s':charenc=UTF-8:fontsdir='%s':"
+                     "force_style='" SUBTITLE_FORCE_STYLE "'[out]",
+                     params->width, params->height, params->frame_rate,
+                     subs, fonts);
+        } else {
+            snprintf(chain, sizeof(chain),
+                     "[in]" VIDEO_SCALE_CHAIN "[base];"
+                     "[base]subtitles=filename='%s':charenc=UTF-8:"
+                     "force_style='" SUBTITLE_FORCE_STYLE "'[out]",
+                     params->width, params->height, params->frame_rate,
+                     subs);
+        }
 
     } else {
 
-        char logo[1024];
-        char font[1024];
-        char caption[1024];
+        snprintf(chain, sizeof(chain), "[in]" VIDEO_SCALE_CHAIN "[out]",
+                 params->width, params->height, params->frame_rate);
 
-        filter_escape(logo, sizeof(logo), params->logo_path);
-        filter_escape(font, sizeof(font), params->font_path);
-
-        if (params->caption_file && params->caption_file[0] != '\0') {
-            filter_escape(caption, sizeof(caption), params->caption_file);
-        } else {
-            caption[0] = '\0';
-        }
-
-        snprintf(chain, sizeof(chain),
-                 "[in]scale=%d:%d,fps=%d[base];"
-                 "movie='%s':loop=1,scale=%d:-1,format=rgba,colorchannelmixer=aa=%f[logo];"
-                 "[base][logo]overlay=W-w-%d:H-h-%d[withlogo];"
-                 "[withlogo]drawtext=fontfile='%s':textfile='%s':expansion=none:fontsize=%d:"
-                 "fontcolor=white@%f:x=%d:y=h-th-%d:shadowx=1:shadowy=1:shadowcolor=black@0.4",
-                 params->width, params->height, params->frame_rate,
-                 logo, params->logo_width, params->opacity,
-                 params->margin, params->margin,
-                 font, caption, params->font_size, params->opacity,
-                 params->margin, params->margin);
     }
 
     AVFilterInOut *inputs = NULL;
@@ -1531,9 +1537,8 @@ transcode_handle_t *transcode_start(const transcode_params_t *params) {
     }
 
     handle->params = *params;
-    handle->params.logo_path = dup_opt(params->logo_path);
-    handle->params.font_path = dup_opt(params->font_path);
-    handle->params.caption_file = dup_opt(params->caption_file);
+    handle->params.subtitle_path = dup_opt(params->subtitle_path);
+    handle->params.fonts_dir = dup_opt(params->fonts_dir);
     handle->params.input_url = dup_opt(params->input_url);
     handle->params.headers = dup_opt(params->headers);
     handle->exit_code = 0;
@@ -1573,9 +1578,8 @@ void transcode_free(transcode_handle_t *handle) {
         return;
     }
 
-    free((void *)handle->params.logo_path);
-    free((void *)handle->params.font_path);
-    free((void *)handle->params.caption_file);
+    free((void *)handle->params.subtitle_path);
+    free((void *)handle->params.fonts_dir);
     free((void *)handle->params.input_url);
     free((void *)handle->params.headers);
     free(handle);

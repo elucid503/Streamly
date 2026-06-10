@@ -5,11 +5,8 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"sync"
 	"time"
-
-	"streamly/internal/config"
 )
 
 // Kind discriminates the two elementary streams the transcoder emits.
@@ -41,9 +38,11 @@ type Request struct {
 	InputURL string      // Direct media URL; HLS uses libavformat's in-process demuxer.
 	Headers  map[string]string
 	Start    time.Duration // Initial playback position; 0 plays from the beginning.
-	Caption  string        // Bottom-right label burned in when overlay assets exist.
-	Key      string        // Unique per playback; names scratch caption files.
-	Context  context.Context
+	Live     bool          // Live HLS: widen packet queues and let playback hold a jitter cushion.
+	Caption      string // Log tag and stats label.
+	SubtitlePath string // External subtitle file for burn-in; empty disables captions.
+	FontsDir     string // Directory containing font.ttf for libass.
+	Context      context.Context
 
 	OnDuration func(durationMs int64) // Called once when the container duration is known.
 }
@@ -53,6 +52,7 @@ type Session struct {
 	Video <-chan Packet
 	Audio <-chan Packet
 	Done  <-chan error
+	Jitter *LiveJitter // Live HLS cushion tracker; nil for VOD.
 
 	pause *pauseState
 }
@@ -202,20 +202,5 @@ func Start(request Request) (*Session, error) {
 	}
 
 	return startNative(request)
-
-}
-
-// overlayAvailable mirrors the TS helper: skip overlay when logo or font is missing.
-func overlayAvailable() bool {
-
-	if _, err := os.Stat(config.Overlay.LogoPath); err != nil {
-		return false
-	}
-
-	if _, err := os.Stat(config.Overlay.FontPath); err != nil {
-		return false
-	}
-
-	return true
 
 }

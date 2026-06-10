@@ -33,7 +33,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -45,10 +44,14 @@ import (
 const videoPacketChannelCap = 180 // About 6 seconds at 30 fps; enough for encoder jitter without runaway memory.
 const audioPacketChannelCap = 400 // About 8 seconds of 20 ms Opus, enough for HLS jitter without hiding pipeline drift.
 
+const videoPacketChannelCapLive = 300 // About 10 seconds at 30 fps for live HLS cushion.
+const audioPacketChannelCapLive = 500 // About 10 seconds of 20 ms Opus for live HLS cushion.
+
 // emitTarget is the live destination and input for one transcode's callbacks.
 type emitTarget struct {
 	ctx        context.Context
 	pause      *pauseState
+	jitter     *LiveJitter
 	video      chan<- Packet
 	audio      chan<- Packet
 	input      InputReader
@@ -122,6 +125,10 @@ func streamlyTranscodeEmit(user C.uintptr_t, kind C.int, data *C.uint8_t, length
 			packet.Duration = opusPacketDuration(payload)
 		}
 
+	}
+
+	if target.jitter != nil {
+		target.jitter.Observe(packet.PTS)
 	}
 
 	for {
@@ -218,15 +225,30 @@ func streamlyTranscodeMeta(user C.uintptr_t, durationMs C.int64_t) {
 
 func startNative(request Request) (*Session, error) {
 
-	video := make(chan Packet, videoPacketChannelCap)
-	audio := make(chan Packet, audioPacketChannelCap)
+	videoCap := videoPacketChannelCap
+	audioCap := audioPacketChannelCap
+
+	if request.Live {
+		videoCap = videoPacketChannelCapLive
+		audioCap = audioPacketChannelCapLive
+	}
+
+	video := make(chan Packet, videoCap)
+	audio := make(chan Packet, audioCap)
 	done := make(chan error, 1)
 
 	pause := newPauseState()
 
+	var jitter *LiveJitter
+
+	if request.Live && config.Download.LiveBufferSec > 0 {
+		jitter = NewLiveJitter(time.Duration(config.Download.LiveBufferSec) * time.Second)
+	}
+
 	target := &emitTarget{
 		ctx:        request.Context,
 		pause:      pause,
+		jitter:     jitter,
 		video:      video,
 		audio:      audio,
 		input:      request.Source,
@@ -265,34 +287,14 @@ func startNative(request Request) (*Session, error) {
 
 	}()
 
-	overlay := overlayAvailable()
-	captionFile := ""
+	var inputURLCString, headersCString, subtitleCString, fontsCString *C.char
 
-	if overlay && request.Caption != "" {
-
-		file, fileErr := os.CreateTemp("", "streamly-caption-"+request.Key+"-*.txt")
-
-		if fileErr == nil {
-
-			if _, writeErr := file.WriteString(request.Caption); writeErr == nil {
-				captionFile = file.Name()
-			}
-
-			file.Close()
-
-		}
-
+	if request.SubtitlePath != "" {
+		subtitleCString = C.CString(request.SubtitlePath)
 	}
 
-	var captionCString, logoCString, fontCString, inputURLCString, headersCString *C.char
-
-	if captionFile != "" {
-		captionCString = C.CString(captionFile)
-	}
-
-	if overlay {
-		logoCString = C.CString(config.Overlay.LogoPath)
-		fontCString = C.CString(config.Overlay.FontPath)
+	if request.FontsDir != "" {
+		fontsCString = C.CString(request.FontsDir)
 	}
 
 	if request.InputURL != "" {
@@ -308,14 +310,8 @@ func startNative(request Request) (*Session, error) {
 		bitrate_video_max_k: C.int(config.Stream.BitrateVideoMax),
 		bitrate_audio_k:     C.int(config.Stream.BitrateAudio),
 		threads:             C.int(config.Stream.Threads),
-		overlay:             C.bool(overlay && captionFile != ""),
-		logo_path:           logoCString,
-		font_path:           fontCString,
-		caption_file:        captionCString,
-		logo_width:          C.int(config.Overlay.LogoWidth),
-		font_size:           C.int(config.Overlay.FontSize),
-		opacity:             C.float(config.Overlay.Opacity),
-		margin:              C.int(config.Overlay.Margin),
+		subtitle_path:       subtitleCString,
+		fonts_dir:           fontsCString,
 		input_url:           inputURLCString,
 		headers:             headersCString,
 		start_ms:            C.int64_t(request.Start.Milliseconds()),
@@ -332,9 +328,8 @@ func startNative(request Request) (*Session, error) {
 
 	handle := C.transcode_start(&params)
 
-	freeCString(captionCString)
-	freeCString(logoCString)
-	freeCString(fontCString)
+	freeCString(subtitleCString)
+	freeCString(fontsCString)
 	freeCString(inputURLCString)
 	freeCString(headersCString)
 
@@ -346,10 +341,6 @@ func startNative(request Request) (*Session, error) {
 		abortFlag = nil
 		abortMu.Unlock()
 
-		if captionFile != "" {
-			_ = os.Remove(captionFile)
-		}
-
 		return nil, fmt.Errorf("failed to start libav transcode")
 	}
 
@@ -360,10 +351,6 @@ func startNative(request Request) (*Session, error) {
 		close(video)
 		close(audio)
 		unregisterEmitTarget(id)
-
-		if captionFile != "" {
-			_ = os.Remove(captionFile)
-		}
 
 		var doneErr error
 
@@ -385,10 +372,11 @@ func startNative(request Request) (*Session, error) {
 	}()
 
 	return &Session{
-		Video: video,
-		Audio: audio,
-		Done:  done,
-		pause: pause,
+		Video:  video,
+		Audio:  audio,
+		Done:   done,
+		Jitter: jitter,
+		pause:  pause,
 	}, nil
 
 }

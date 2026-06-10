@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"streamly/internal/captions"
 	"streamly/internal/config"
 	"streamly/internal/selfbot"
 	"streamly/internal/source"
@@ -24,13 +25,17 @@ const (
 	CloseError   CloseReason = "error"
 )
 
+// QualityResolver returns the playback URL for attempt 0 (primary) and higher fallbacks.
+type QualityResolver func(attempt int) (string, error)
+
 // Request is everything a session needs to download, transcode, and play one title.
 type Request struct {
 	GuildID      string
 	ChannelID    string
-	Caption      string // Bottom-right overlay label and log tag.
+	Caption      string // Log tag and stats label.
 	InitialURL   string
 	ResolveURL   source.UrlResolver
+	QualityURL   QualityResolver // Optional Febbox quality fallbacks when transcode fails.
 	QualityLabel string
 	Headers      map[string]string // HTTP headers for HLS/direct input; defaults to Febbox when nil.
 	Live         bool              // Live streams cannot be paused and re-resolve on expiry.
@@ -60,6 +65,11 @@ type Session struct {
 	seekMu        sync.Mutex
 	pendingSeek   *time.Duration
 	segmentCancel context.CancelFunc
+
+	Captions         *captions.Track
+	FontsDir         string
+	CaptionSource    string
+	CaptionQueryKey  string
 }
 
 func (session *Session) setSegmentCancel(cancel context.CancelFunc) {
@@ -99,15 +109,17 @@ func (session *Session) seekPending() bool {
 
 // Stats is a user-facing playback snapshot.
 type Stats struct {
-	ID           string
-	Caption      string
-	ChannelID    string
-	Paused       bool
-	UptimeMs     int64
-	BytesRead    int64
-	QualityLabel string
-	PositionMs   int64
-	DurationMs   *int64
+	ID              string
+	Caption         string
+	ChannelID       string
+	Paused          bool
+	CaptionsEnabled bool
+	CaptionSource   string
+	UptimeMs        int64
+	BytesRead       int64
+	QualityLabel    string
+	PositionMs      int64
+	DurationMs      *int64
 }
 
 // Pool owns the streaming accounts and runs each download → transcode → play loop.
@@ -156,6 +168,10 @@ func (p *Pool) Acquire() *Session {
 			session.Paused = false
 			session.StopRequested = false
 			session.stats = &source.MediaSourceStats{}
+			session.Captions = &captions.Track{}
+			session.FontsDir = ""
+			session.CaptionSource = ""
+			session.CaptionQueryKey = ""
 
 			return session
 
@@ -251,15 +267,17 @@ func (p *Pool) Stats(session *Session) Stats {
 	position := p.positionMs(session)
 
 	return Stats{
-		ID:           session.ID,
-		Caption:      captionOf(session),
-		ChannelID:    channelOf(session),
-		Paused:       session.Paused,
-		UptimeMs:     uptime,
-		BytesRead:    session.stats.BytesRead,
-		QualityLabel: qualityOf(session),
-		PositionMs:   position,
-		DurationMs:   session.stats.DurationMs,
+		ID:              session.ID,
+		Caption:         captionOf(session),
+		ChannelID:       channelOf(session),
+		Paused:          session.Paused,
+		CaptionsEnabled: session.Captions != nil && session.Captions.Enabled(),
+		CaptionSource:   session.CaptionSource,
+		UptimeMs:        uptime,
+		BytesRead:       session.stats.BytesRead,
+		QualityLabel:    qualityOf(session),
+		PositionMs:      position,
+		DurationMs:      session.stats.DurationMs,
 	}
 
 }
@@ -430,6 +448,14 @@ func (p *Pool) Release(session *Session) {
 	session.segmentCancel = nil
 	session.seekMu.Unlock()
 
+	if session.Captions != nil {
+		session.Captions.Reset()
+	}
+
+	session.FontsDir = ""
+	session.CaptionSource = ""
+	session.CaptionQueryKey = ""
+
 	session.Streamer.LeaveVoice()
 
 	session.Busy = false
@@ -492,6 +518,7 @@ func (p *Pool) stream(ctx context.Context, session *Session, request Request) er
 func (p *Pool) playProgressive(ctx context.Context, session *Session, playback *streamer.Playback, request Request, headers map[string]string) error {
 
 	offset := time.Duration(0)
+	qualityAttempt := 0
 
 	for {
 
@@ -499,7 +526,13 @@ func (p *Pool) playProgressive(ctx context.Context, session *Session, playback *
 			return err
 		}
 
-		media, err := source.Create(request.ResolveURL, headers, request.InitialURL, session.stats)
+		playbackURL, err := playbackURLForAttempt(request, qualityAttempt)
+
+		if err != nil {
+			return err
+		}
+
+		media, err := source.Create(request.ResolveURL, headers, playbackURL, session.stats)
 
 		if err != nil {
 			return err
@@ -527,9 +560,45 @@ func (p *Pool) playProgressive(ctx context.Context, session *Session, playback *
 			return playErr
 		}
 
+		if transErr != nil && request.QualityURL != nil {
+
+			if _, err := request.QualityURL(qualityAttempt + 1); err == nil {
+				log.Printf(`[stream] transcode failed for "%s", trying quality fallback %d: %v`,
+					request.Caption, qualityAttempt+1, transErr)
+				qualityAttempt++
+				offset = 0
+				continue
+			}
+
+		}
+
 		return transErr
 
 	}
+
+}
+
+func playbackURLForAttempt(request Request, attempt int) (string, error) {
+
+	if request.QualityURL != nil {
+
+		url, err := request.QualityURL(attempt)
+
+		if err != nil {
+			return "", err
+		}
+
+		if url != "" {
+			return url, nil
+		}
+
+	}
+
+	if attempt == 0 {
+		return request.InitialURL, nil
+	}
+
+	return "", fmt.Errorf("no quality fallback for attempt %d", attempt)
 
 }
 
@@ -569,6 +638,7 @@ func (p *Pool) playHLS(ctx context.Context, session *Session, playback *streamer
 			InputURL: url,
 			Headers:  headers,
 			Caption:  request.Caption,
+			Live:     request.Live,
 		}, 0, nil)
 
 		if ctx.Err() != nil {
@@ -610,9 +680,13 @@ func (p *Pool) runSegment(ctx context.Context, session *Session, playback *strea
 	}
 
 	treq.Start = offset
-	treq.Key = session.ID
 	treq.Context = segCtx
 	treq.OnDuration = func(ms int64) { session.stats.DurationMs = &ms }
+
+	if session.Captions != nil && session.Captions.Enabled() {
+		treq.SubtitlePath = session.Captions.Path()
+		treq.FontsDir = session.FontsDir
+	}
 
 	ts, err := transcode.Start(treq)
 

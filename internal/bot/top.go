@@ -35,7 +35,7 @@ func (b *Bot) handleTop(s *discordgo.Session, i *discordgo.InteractionCreate) {
 func topEmbed(results []febapi.SearchResult) *discordgo.MessageEmbed {
 
 	embed := &discordgo.MessageEmbed{
-		Color: 0x5865f2,
+		Color: embedColor,
 		Title: "Top",
 	}
 

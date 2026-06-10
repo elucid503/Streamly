@@ -235,7 +235,13 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 
 			s.applyPauseEvent(ts)
 
-			if !s.clock.wait(ctx, packet.PTS) {
+			delay := time.Duration(0)
+
+			if ts.Jitter != nil {
+				delay = ts.Jitter.Delay(packet.PTS)
+			}
+
+			if !s.clock.wait(ctx, packet.PTS, delay) {
 				return ctx.Err()
 			}
 
@@ -315,7 +321,8 @@ type mediaClock struct {
 // wait blocks until the shared clock reaches pts. It anchors once on the first packet seen across both
 // feeds; a feed that starts late (x264 buffers frames before audio) simply fast-forwards its backlog to
 // catch up rather than re-anchoring, which would corrupt the other feed's pacing.
-func (c *mediaClock) wait(ctx context.Context, pts time.Duration) bool {
+// extraDelay slows consumption when a live jitter cushion is over-full.
+func (c *mediaClock) wait(ctx context.Context, pts time.Duration, extraDelay time.Duration) bool {
 
 	c.mu.Lock()
 
@@ -330,6 +337,10 @@ func (c *mediaClock) wait(ctx context.Context, pts time.Duration) bool {
 
 	sleep := (pts - c.ptsStart) - time.Since(c.wallStart)
 	c.mu.Unlock()
+
+	if extraDelay > 0 {
+		sleep += extraDelay
+	}
 
 	if sleep <= 0 {
 		return true

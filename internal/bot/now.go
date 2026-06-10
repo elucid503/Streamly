@@ -19,7 +19,7 @@ func (b *Bot) handleNow(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	if session == nil || !session.Busy {
 		respondEmbed(s, i, &discordgo.MessageEmbed{
-			Color:       0x5865f2,
+			Color:       embedColor,
 			Title:       "Now",
 			Description: "Nothing is streaming in this server.",
 		})
@@ -74,7 +74,7 @@ func nowFallbackEmbed(p *pool.Pool, session *pool.Session) *discordgo.MessageEmb
 	}
 
 	embed := &discordgo.MessageEmbed{
-		Color:  0x5865f2,
+		Color:  embedColor,
 		Author: &discordgo.MessageEmbedAuthor{Name: header},
 		Title:  caption,
 	}

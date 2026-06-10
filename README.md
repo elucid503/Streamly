@@ -11,11 +11,12 @@ Educational Discord bot that streams movies and TV shows from FebAPI into a voic
 
 | Package | Responsibility |
 | --- | --- |
-| `internal/config` | Env parsing, transcode targets, overlay, and download knobs. |
+| `internal/config` | Env parsing, transcode targets, and download knobs. |
 | `internal/febapi` | Showbox search and Febbox browsing. |
 | `internal/media` | Title resolution and quality picking. |
 | `internal/source` | Progressive media downloader. HLS is handled by libavformat. |
-| `internal/transcode` | CGO libav: HLS/progressive demux, decode, scale/overlay, H264+Opus encode. |
+| `internal/captions` | Subtitle lookup (Febbox sidecars, SubDL) and burn-in state. |
+| `internal/transcode` | CGO libav: HLS/progressive demux, decode, scale, subtitles, H264+Opus encode. |
 | `internal/selfbot` | Minimal gateway client with token safety checks. |
 | `internal/streamer` | Voice gateway, WebRTC, Go Live playback, and packet pacing. |
 | `internal/pool` | Selfbot pool and join -> transcode -> play lifecycle. |
@@ -54,7 +55,8 @@ sudo apt-get install -y \
   libx264-dev \
   libopus-dev \
   libfreetype6-dev \
-  libfontconfig1-dev
+  libfontconfig1-dev \
+  libass-dev
 ```
 
 Discord voice requires the DAVE E2EE protocol. Install libdave once:
@@ -93,11 +95,10 @@ STREAM_BITRATE=3000
 STREAM_MAX_BITRATE=5000
 STREAM_AUDIO_BITRATE=128
 STREAM_THREADS=0
-STREAM_LOGO_PATH=assets/logo.png
-STREAM_FONT_PATH=assets/font.ttf
+SUBDL_API_KEY=...
 ```
 
-The overlay is skipped unless both `STREAM_LOGO_PATH` and `STREAM_FONT_PATH` exist.
+Drop `assets/font.ttf` beside the binary for subtitles. `/subtitles` turns them on or off for the active stream. Subtitles are fetched from Febbox sidecar files when present, otherwise from SubDL.
 
 ## Run
 

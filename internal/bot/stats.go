@@ -5,6 +5,8 @@ import (
 	"runtime"
 
 	"github.com/bwmarrin/discordgo"
+
+	"streamly/internal/pool"
 )
 
 func (b *Bot) handleStats(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -26,7 +28,7 @@ func (b *Bot) handleStats(s *discordgo.Session, i *discordgo.InteractionCreate) 
 	}
 
 	embed := &discordgo.MessageEmbed{
-		Color:  0x5865f2,
+		Color:  embedColor,
 		Author: &discordgo.MessageEmbedAuthor{Name: "Stream Stats"},
 		Title:  fallbackCaption(stats.Caption, "Active Stream"),
 		Fields: []*discordgo.MessageEmbedField{
@@ -36,6 +38,8 @@ func (b *Bot) handleStats(s *discordgo.Session, i *discordgo.InteractionCreate) 
 			{Name: "Position", Value: positionField, Inline: true},
 			{Name: "Memory", Value: formatBytes(memoryRSS()), Inline: true},
 			{Name: "Quality", Value: fallbackCaption(stats.QualityLabel, "Auto"), Inline: true},
+			{Name: "Bytes Read", Value: formatBytes(stats.BytesRead), Inline: true},
+			{Name: "Subtitles", Value: subtitlesLabel(stats), Inline: true},
 		},
 	}
 
@@ -63,6 +67,19 @@ func channelLabel(channelID string) string {
 	}
 
 	return fmt.Sprintf("<#%s>", channelID)
+
+}
+
+func subtitlesLabel(stats pool.Stats) string {
+
+	if stats.CaptionsEnabled {
+		if stats.CaptionSource != "" {
+			return "On (" + stats.CaptionSource + ")"
+		}
+		return "On"
+	}
+
+	return "Off"
 
 }
 
