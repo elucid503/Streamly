@@ -492,9 +492,22 @@ func (p *Pool) Release(session *Session) {
 	session.Paused = false
 	session.StopRequested = false
 
-	// Encourage the runtime and native heaps to give pages back after a long transcode session.
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+
+	// Encourage the runtime to return pages after a long transcode session. Native heaps
+	// (libav, libdatachannel) are not released until process exit.
+	transcode.TrimNativeHeap()
 	runtime.GC()
 	debug.FreeOSMemory()
+
+	runtime.ReadMemStats(&after)
+
+	log.Printf("[stream] session %s released: heap in use %s -> %s, reserved %s",
+		session.ID,
+		formatMem(before.HeapInuse),
+		formatMem(after.HeapInuse),
+		formatMem(after.Sys))
 
 }
 
@@ -858,5 +871,27 @@ func min64(a, b int64) int64 {
 	}
 
 	return b
+
+}
+
+func formatMem(bytes uint64) string {
+
+	const unit = 1024
+
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+
+	value := float64(bytes)
+	exp := 0
+
+	for value >= unit && exp < 4 {
+		value /= unit
+		exp++
+	}
+
+	suffix := []string{"KiB", "MiB", "GiB", "TiB"}
+
+	return fmt.Sprintf("%.1f %s", value, suffix[exp-1])
 
 }

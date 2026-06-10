@@ -27,6 +27,8 @@ type daveSession struct {
 	callbacks                     godave.Callbacks
 	session                       *libdave.Session
 	encryptor                     *libdave.Encryptor
+	videoEncryptScratch           []byte
+	audioEncryptScratch           []byte
 	decryptors                    map[godave.UserID]*libdave.Decryptor
 	preparedTransitions           map[uint16]uint16
 	lastPreparedTransitionVersion uint16
@@ -133,13 +135,25 @@ func (s *daveSession) encrypt(mediaType libdave.MediaType, ssrc uint32, frame []
 		return frame, nil
 	}
 
-	out := make([]byte, s.encryptor.GetMaxCiphertextByteSize(mediaType, len(frame)))
+	need := s.encryptor.GetMaxCiphertextByteSize(mediaType, len(frame))
+	scratch := &s.audioEncryptScratch
+
+	if mediaType == libdave.MediaTypeVideo {
+		scratch = &s.videoEncryptScratch
+	}
+
+	if cap(*scratch) < need {
+		*scratch = make([]byte, need)
+	}
+
+	out := (*scratch)[:need]
 	n, err := s.encryptor.Encrypt(mediaType, ssrc, frame, out)
 
 	if err != nil {
 		return nil, err
 	}
 
+	// Callers must send out[:n] before the next encrypt call on this media type (true for mediaSender pumps).
 	return out[:n], nil
 
 }

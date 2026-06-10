@@ -18,7 +18,7 @@
 #include <libswresample/swresample.h>
 
 #define INPUT_AVIO_SIZE (64 * 1024)
-#define PACKET_QUEUE_CAP 64
+#define PACKET_QUEUE_CAP 48
 #define AUDIO_DRAIN_BATCH 3
 #define ERR_BUF 2048
 #define INPUT_OPEN_MAX_RETRIES 5

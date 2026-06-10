@@ -228,6 +228,22 @@ func formatDuration(ms int64) string {
 
 }
 
+// formatClock renders a duration as m:ss or h:mm:ss for compact embed fields.
+func formatClock(ms int64) string {
+
+	total := max64(0, ms/1000)
+	hours := total / 3600
+	minutes := (total % 3600) / 60
+	seconds := total % 60
+
+	if hours > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", hours, minutes, seconds)
+	}
+
+	return fmt.Sprintf("%d:%02d", minutes, seconds)
+
+}
+
 func qualityLabel(quality febapi.FileQuality) string {
 
 	label := strings.TrimSpace(quality.Quality + " " + quality.Name)

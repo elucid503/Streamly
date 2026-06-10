@@ -731,6 +731,7 @@ type MediaPeer struct {
 	closed           atomic.Bool
 	packetizersReady atomic.Bool
 	closeMu          sync.Mutex
+	videoScratch     []byte // Reused by the video pump for SPS rewrite output.
 }
 
 func newMediaPeer(gateway *mediaGateway, audioSSRC, videoSSRC, rtxSSRC int) *MediaPeer {
@@ -875,7 +876,7 @@ func (m *MediaPeer) sendVideo(data []byte, duration time.Duration) {
 		return
 	}
 
-	data = rewriteH264SPS(data)
+	data = rewriteH264SPSInto(&m.videoScratch, data)
 
 	encrypted, err := m.gateway.dave.EncryptVideo(uint32(m.videoSSRC), data)
 

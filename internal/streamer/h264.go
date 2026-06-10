@@ -9,6 +9,11 @@ const h264NalTypeSPS = 7 // SPS NAL unit type.
 
 // rewriteH264SPS rewrites SPS VUI so Discord's decoder accepts the Annex-B frame.
 func rewriteH264SPS(frame []byte) []byte {
+	return rewriteH264SPSInto(nil, frame)
+}
+
+// rewriteH264SPSInto rewrites SPS VUI, reusing scratch when a new buffer is required.
+func rewriteH264SPSInto(scratch *[]byte, frame []byte) []byte {
 
 	nalus := splitNALUs(frame)
 	rewritten := false
@@ -30,14 +35,41 @@ func rewriteH264SPS(frame []byte) []byte {
 		return frame
 	}
 
-	var buf []byte
+	need := len(frame)
+
+	for _, nalu := range nalus {
+		need += len(startCode3) + len(nalu)
+	}
+
+	buf := growByteScratch(scratch, need)[:0]
 
 	for _, nalu := range nalus {
 		buf = append(buf, startCode3...)
 		buf = append(buf, nalu...)
 	}
 
+	if scratch != nil {
+		*scratch = buf
+	}
+
 	return buf
+
+}
+
+func growByteScratch(scratch *[]byte, need int) []byte {
+
+	if scratch == nil {
+		buf := make([]byte, 0, need)
+		return buf
+	}
+
+	if cap(*scratch) >= need {
+		return *scratch
+	}
+
+	*scratch = make([]byte, 0, need)
+
+	return *scratch
 
 }
 

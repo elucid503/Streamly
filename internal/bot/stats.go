@@ -20,26 +20,20 @@ func (b *Bot) handleStats(s *discordgo.Session, i *discordgo.InteractionCreate) 
 
 	stats := b.Pool.Stats(session)
 
-	position := formatDuration(stats.PositionMs)
-	positionField := position
-
-	if stats.DurationMs != nil {
-		positionField = fmt.Sprintf("%s / %s", position, formatDuration(*stats.DurationMs))
-	}
-
 	embed := &discordgo.MessageEmbed{
 		Color:  embedColor,
 		Author: &discordgo.MessageEmbedAuthor{Name: "Stream Stats"},
 		Title:  fallbackCaption(stats.Caption, "Active Stream"),
 		Fields: []*discordgo.MessageEmbedField{
 			{Name: "Status", Value: statusLabel(stats.Paused), Inline: true},
-			{Name: "Uptime", Value: formatDuration(stats.UptimeMs), Inline: true},
+			{Name: "Uptime", Value: formatClock(stats.UptimeMs), Inline: true},
 			{Name: "Channel", Value: channelLabel(stats.ChannelID), Inline: true},
-			{Name: "Position", Value: positionField, Inline: true},
+			{Name: "Position", Value: positionLabel(stats.PositionMs, stats.DurationMs), Inline: true},
 			{Name: "Memory", Value: memoryUsageLabel(), Inline: true},
 			{Name: "Quality", Value: fallbackCaption(stats.QualityLabel, "Auto"), Inline: true},
-			{Name: "Bytes Read", Value: formatBytes(stats.BytesRead), Inline: true},
+			{Name: "Read", Value: formatBytes(stats.BytesRead), Inline: true},
 			{Name: "Subtitles", Value: subtitlesLabel(stats), Inline: true},
+			{Name: "Progress", Value: progressLabel(stats.PositionMs, stats.DurationMs), Inline: true},
 		},
 	}
 
@@ -96,11 +90,43 @@ func fallbackCaption(value, fallback string) string {
 
 }
 
+func positionLabel(positionMs int64, durationMs *int64) string {
+
+	if durationMs == nil {
+		return formatClock(positionMs)
+	}
+
+	return fmt.Sprintf("%s / %s", formatClock(positionMs), formatClock(*durationMs))
+
+}
+
+func progressLabel(positionMs int64, durationMs *int64) string {
+
+	if durationMs == nil || *durationMs <= 0 {
+		return "—"
+	}
+
+	percent := float64(positionMs) / float64(*durationMs) * 100
+
+	if percent > 100 {
+		percent = 100
+	}
+
+	return fmt.Sprintf("%.0f%%", percent)
+
+}
+
 func memoryUsageLabel() string {
 
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
 
-	return fmt.Sprintf("%s in use / %s reserved", formatBytes(int64(mem.HeapInuse)), formatBytes(int64(mem.Sys)))
+	return fmt.Sprintf("%s / %s MB", formatMegabytes(mem.HeapInuse), formatMegabytes(mem.Sys))
+
+}
+
+func formatMegabytes(bytes uint64) string {
+
+	return fmt.Sprintf("%.0f", float64(bytes)/(1024*1024))
 
 }

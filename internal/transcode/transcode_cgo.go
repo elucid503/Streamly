@@ -33,11 +33,11 @@ import (
 	"streamly/internal/config"
 )
 
-const videoPacketChannelCap = 180 // About 6 seconds at 30 fps; enough for encoder jitter without runaway memory.
-const audioPacketChannelCap = 400 // About 8 seconds of 20 ms Opus, enough for HLS jitter without hiding pipeline drift.
+const videoPacketChannelCap = 120 // About 4 seconds at 30 fps; balances jitter cushion vs Go heap.
+const audioPacketChannelCap = 200 // About 4 seconds of 20 ms Opus.
 
-const videoPacketChannelCapLive = 300 // About 10 seconds at 30 fps for live HLS cushion.
-const audioPacketChannelCapLive = 500 // About 10 seconds of 20 ms Opus for live HLS cushion.
+const videoPacketChannelCapLive = 180 // About 6 seconds at 30 fps for live HLS cushion.
+const audioPacketChannelCapLive = 300 // About 6 seconds of 20 ms Opus for live HLS cushion.
 
 // emitTarget is the live destination and input for one transcode's callbacks.
 type emitTarget struct {
@@ -96,10 +96,15 @@ func streamlyTranscodeEmit(user C.uintptr_t, kind C.int, data *C.uint8_t, length
 		return
 	}
 
-	packet := packetFromC(unsafe.Pointer(data), int(length))
-	packet.Kind = KindVideo
-	packet.PTS = time.Duration(int64(ptsMs)) * time.Millisecond
-	packet.Duration = time.Duration(int64(durMs)) * time.Millisecond
+	n := int(length)
+	payload := C.GoBytes(unsafe.Pointer(data), C.int(n))
+
+	packet := Packet{
+		Kind:     KindVideo,
+		Data:     payload,
+		PTS:      time.Duration(int64(ptsMs)) * time.Millisecond,
+		Duration: time.Duration(int64(durMs)) * time.Millisecond,
+	}
 
 	channel := target.video
 
@@ -109,7 +114,7 @@ func streamlyTranscodeEmit(user C.uintptr_t, kind C.int, data *C.uint8_t, length
 		channel = target.audio
 
 		if packet.Duration <= 0 {
-			packet.Duration = opusPacketDuration(packet.Data)
+			packet.Duration = opusPacketDuration(payload)
 		}
 
 	}
@@ -118,21 +123,13 @@ func streamlyTranscodeEmit(user C.uintptr_t, kind C.int, data *C.uint8_t, length
 		target.jitter.Observe(packet.PTS)
 	}
 
-	for {
+	if !target.pause.Wait(target.ctx) {
+		return
+	}
 
-		if !target.pause.Wait(target.ctx) {
-			return
-		}
-
-		select {
-		case channel <- packet:
-			return
-		case <-target.ctx.Done():
-			return
-		default:
-			time.Sleep(5 * time.Millisecond)
-		}
-
+	select {
+	case channel <- packet:
+	case <-target.ctx.Done():
 	}
 
 }
@@ -348,6 +345,7 @@ func startNative(request Request) (*Session, error) {
 		}
 
 		C.transcode_free(handle)
+		trimNativeHeap()
 
 		abortMu.Lock()
 		C.free(unsafe.Pointer(abortFlag))

@@ -23,8 +23,6 @@ type Packet struct {
 	Data     []byte
 	PTS      time.Duration
 	Duration time.Duration
-
-	dataRef *[]byte // Pooled backing store; returned via ReleasePacket.
 }
 
 // InputReader is a byte-seekable media input; Size returns total bytes or -1 when unknown.
@@ -174,6 +172,11 @@ func (p *pauseState) Event(lastSeen uint64) (time.Duration, uint64) {
 
 	return p.last, p.epoch
 
+}
+
+// TrimNativeHeap encourages libc/ffmpeg to return free pages to the OS after a transcode session.
+func TrimNativeHeap() {
+	trimNativeHeap()
 }
 
 // Start launches a libav transcode that emits encoded H264 and Opus packets directly to Go.
