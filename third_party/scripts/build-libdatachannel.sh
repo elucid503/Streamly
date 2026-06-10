@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 LIBDC="$ROOT/third_party/libdatachannel"
 
 CMAKE="$(command -v cmake)"
 
-if [[ ! -d "$LIBDC/.git" ]]; then
+if [[ ! -f "$LIBDC/include/rtc/rtc.hpp" ]]; then
+	rm -rf "$LIBDC"
 	git clone --depth 1 --branch v0.24.0 https://github.com/paullouisageneau/libdatachannel.git "$LIBDC"
 fi
 

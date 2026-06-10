@@ -68,11 +68,13 @@ export LD_LIBRARY_PATH="$HOME/.local/lib:${LD_LIBRARY_PATH}"
 
 Use Go 1.24+.
 
-If `third_party/libdatachannel/build` is missing, build the static WebRTC dependency:
+A fresh clone does not include libdatachannel sources (only an empty `third_party/libdatachannel/` placeholder). Build the static WebRTC dependency before compiling:
 
 ```bash
 scripts/build-libdatachannel.sh
 ```
+
+This clones libdatachannel v0.24.0 into `third_party/libdatachannel/` and produces `third_party/libdatachannel/build/libdatachannel.a`. Requires `cmake`, `git`, and `libssl-dev`.
 
 ## Configuration
 
