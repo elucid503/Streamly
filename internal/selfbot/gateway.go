@@ -17,20 +17,20 @@ type gateway struct {
 	client *Client
 	conn   *websocket.Conn
 
-	mu            sync.Mutex
-	sessionID     string
-	sequence      int
-	hasSequence   bool
-	heartbeat     *time.Ticker
-	lastBeatAck   bool
-	identified    chan error
+	mu          sync.Mutex
+	sessionID   string
+	sequence    int
+	hasSequence bool
+	heartbeat   *time.Ticker
+	lastBeatAck bool
+	identified  chan error
 }
 
 func newGateway(client *Client) *gateway {
 
 	return &gateway{
-		client:     client,
-		identified: make(chan error, 1),
+		client:      client,
+		identified:  make(chan error, 1),
 		lastBeatAck: true,
 	}
 

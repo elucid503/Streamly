@@ -66,10 +66,10 @@ type Session struct {
 	pendingSeek   *time.Duration
 	segmentCancel context.CancelFunc
 
-	Captions         *captions.Track
-	FontsDir         string
-	CaptionSource    string
-	CaptionQueryKey  string
+	Captions        *captions.Track
+	FontsDir        string
+	CaptionSource   string
+	CaptionQueryKey string
 }
 
 func (session *Session) setSegmentCancel(cancel context.CancelFunc) {
@@ -375,8 +375,7 @@ func (p *Pool) Resume(session *Session) {
 // ErrUnseekable marks sources whose container cannot be repositioned safely.
 var ErrUnseekable = errors.New("this source cannot be seeked")
 
-// Seek schedules a jump to target; the playback loop restarts the transcode at that
-// position while the Discord stream stays up. Returns the clamped target position.
+// Seek schedules a jump to target; playback restarts transcode while the Discord stream stays up.
 func (p *Pool) Seek(session *Session, target time.Duration) (time.Duration, error) {
 
 	session.seekMu.Lock()
@@ -390,8 +389,7 @@ func (p *Pool) Seek(session *Session, target time.Duration) (time.Duration, erro
 		return 0, errors.New("live streams cannot be seeked")
 	}
 
-	// libav 6.1's HLS demuxer corrupts fMP4 streams on av_seek_frame; refuse cleanly
-	// rather than freeze. VOD rarely lands here since PickQuality prefers progressive.
+	// libav 6.1's HLS demuxer corrupts fMP4 on av_seek_frame; refuse rather than freeze.
 	if source.IsHlsURL(session.request.InitialURL) {
 		return 0, ErrUnseekable
 	}
@@ -489,8 +487,7 @@ func (p *Pool) runLoop(session *Session, request Request) {
 
 }
 
-// stream downloads, transcodes, and plays one title; it blocks until playback ends.
-// One Go Live stream stays open for the whole title; /seek only swaps the transcode.
+// stream downloads, transcodes, and plays one title; one Go Live stream stays open for /seek.
 func (p *Pool) stream(ctx context.Context, session *Session, request Request) error {
 
 	headers := request.Headers
@@ -666,7 +663,6 @@ func (p *Pool) playHLS(ctx context.Context, session *Session, playback *streamer
 }
 
 // runSegment plays one transcode session into the open stream, starting at offset.
-// cleanup runs right after playback so a blocked network read can't stall teardown.
 func (p *Pool) runSegment(ctx context.Context, session *Session, playback *streamer.Playback, treq transcode.Request, offset time.Duration, cleanup func()) (error, error) {
 
 	segCtx, segCancel := context.WithCancel(ctx)
@@ -710,8 +706,7 @@ func (p *Pool) runSegment(ctx context.Context, session *Session, playback *strea
 
 	playErr := playback.Run(segCtx, ts)
 
-	// Unblock any in-flight network read so libav can wind down quickly. Don't cancel
-	// segCtx yet: on a clean EOF that would overwrite ts.Done's nil with ctx.Canceled.
+	// Unblock in-flight reads for teardown; don't cancel segCtx yet or ts.Done gets ctx.Canceled.
 	if cleanup != nil {
 		cleanup()
 	}

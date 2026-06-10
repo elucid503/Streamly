@@ -2,9 +2,7 @@ package media
 
 import "strings"
 
-// StreamFilePreference ranks Febbox files when multiple copies share an episode number.
-// Higher is better. Prefer H.264/BluRay sources over HEVC/x265 re-encodes that often
-// decode with wrong color metadata in the libav pipeline.
+// StreamFilePreference ranks Febbox files when multiple copies share an episode number; higher is better.
 func StreamFilePreference(name string) int {
 
 	lower := strings.ToLower(name)

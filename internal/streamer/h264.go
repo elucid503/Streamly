@@ -5,12 +5,9 @@ import "bytes"
 // startCode3 is the 3-byte Annex-B NAL start prefix.
 var startCode3 = []byte{0, 0, 1}
 
-const h264NalTypeSPS = 7 /** SPS NAL unit type. */
+const h264NalTypeSPS = 7 // SPS NAL unit type.
 
-// rewriteH264SPS rewrites the VUI of every SPS in an Annex-B frame so Discord's decoder accepts it.
-// Discord requires bitstream_restriction with max_num_reorder_frames=0; raw x264 SPS omit it and render
-// black. This mirrors @dank074/discord-video-stream's SPSVUIRewriter. On any parse error the original
-// frame is returned unchanged.
+// rewriteH264SPS rewrites SPS VUI so Discord's decoder accepts the Annex-B frame.
 func rewriteH264SPS(frame []byte) []byte {
 
 	nalus := splitNALUs(frame)
@@ -113,8 +110,8 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 			writer.writeBits(reader.readBits(1), 1) // separate_colour_plane_flag
 		}
 
-		writer.writeUE(reader.readUE()) // bit_depth_luma_minus8
-		writer.writeUE(reader.readUE()) // bit_depth_chroma_minus8
+		writer.writeUE(reader.readUE())         // bit_depth_luma_minus8
+		writer.writeUE(reader.readUE())         // bit_depth_chroma_minus8
 		writer.writeBits(reader.readBits(1), 1) // qpprime_y_zero_transform_bypass_flag
 
 		seqScalingMatrixPresent := reader.readBits(1)
@@ -215,13 +212,13 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 
 	// addBitstreamRestriction writes the restriction defaults, forcing max_num_reorder_frames to 0.
 	addBitstreamRestriction := func() {
-		writer.writeBits(1, 1)            // motion_vectors_over_pic_boundaries_flag
-		writer.writeUE(2)                 // max_bytes_per_pic_denom
-		writer.writeUE(1)                 // max_bits_per_mb_denom
-		writer.writeUE(16)                // log2_max_mv_length_horizontal
-		writer.writeUE(16)                // log2_max_mv_length_vertical
-		writer.writeUE(0)                 // max_num_reorder_frames
-		writer.writeUE(maxNumRefFrames)   // max_dec_frame_buffering
+		writer.writeBits(1, 1)          // motion_vectors_over_pic_boundaries_flag
+		writer.writeUE(2)               // max_bytes_per_pic_denom
+		writer.writeUE(1)               // max_bits_per_mb_denom
+		writer.writeUE(16)              // log2_max_mv_length_horizontal
+		writer.writeUE(16)              // log2_max_mv_length_vertical
+		writer.writeUE(0)               // max_num_reorder_frames
+		writer.writeUE(maxNumRefFrames) // max_dec_frame_buffering
 	}
 
 	vuiPresent := reader.readBits(1)

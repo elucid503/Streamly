@@ -38,4 +38,3 @@ func generateStreamKey(call bool, guildID, channelID, userID string) string {
 	return fmt.Sprintf("guild:%s:%s:%s", guildID, channelID, userID)
 
 }
-

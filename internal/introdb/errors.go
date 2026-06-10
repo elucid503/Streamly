@@ -7,14 +7,14 @@ import (
 )
 
 var (
-	ErrUnauthorized   = errors.New("introdb: unauthorized")
-	ErrRateLimited    = errors.New("introdb: rate limited")
-	ErrBlocked        = errors.New("introdb: blocked by edge protection")
-	ErrNotFound       = errors.New("introdb: media not found")
-	ErrAccountLocked  = errors.New("introdb: account locked")
-	ErrNoIntroData    = errors.New("no intro timing recorded")
-	ErrPastIntro      = errors.New("already past the intro")
-	ErrNotInIntro     = errors.New("not in the intro")
+	ErrUnauthorized  = errors.New("introdb: unauthorized")
+	ErrRateLimited   = errors.New("introdb: rate limited")
+	ErrBlocked       = errors.New("introdb: blocked by edge protection")
+	ErrNotFound      = errors.New("introdb: media not found")
+	ErrAccountLocked = errors.New("introdb: account locked")
+	ErrNoIntroData   = errors.New("no intro timing recorded")
+	ErrPastIntro     = errors.New("already past the intro")
+	ErrNotInIntro    = errors.New("not in the intro")
 )
 
 // APIError is a non-2xx response from TheIntroDB.

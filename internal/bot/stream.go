@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -15,6 +16,17 @@ import (
 	"streamly/internal/media"
 	"streamly/internal/pool"
 	"streamly/internal/tvapi"
+)
+
+var (
+	selectionValueRE = regexp.MustCompile(`^([12]):(\d+)$`)
+	seasonNumberRE   = regexp.MustCompile(`(\d+)`)
+	episodeNumberREs = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)s\d{1,2}[ ._-]?e(\d{1,4})`),
+		regexp.MustCompile(`(?i)\b\d{1,2}x(\d{1,4})\b`),
+		regexp.MustCompile(`(?i)\bepisode[ ._-]?(\d{1,4})\b`),
+		regexp.MustCompile(`(?i)\be(\d{1,4})\b`),
+	}
 )
 
 // streamMedia tracks per-session quality picks for URL re-resolution.
@@ -171,7 +183,7 @@ func (b *Bot) handleStream(s *discordgo.Session, i *discordgo.InteractionCreate)
 		return
 	}
 
-	episodes := toEpisodes(b.Resolver.Files(root), 1, &details)
+	episodes := toEpisodes(b.Resolver.Files(root))
 
 	if len(episodes) == 0 {
 		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("No episodes were found for that show.")})
@@ -225,7 +237,7 @@ func (b *Bot) handleSelect(s *discordgo.Session, i *discordgo.InteractionCreate,
 			return
 		}
 
-		episodes := toEpisodes(b.Resolver.Files(children), season, &details)
+		episodes := toEpisodes(b.Resolver.Files(children))
 
 		if len(episodes) == 0 {
 			editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("No episodes were found in that season.")})
@@ -352,12 +364,11 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 			return urls[attempt], nil
 		},
 		OnClose: func(reason pool.CloseReason) {
+			delete(streamMedia, session.ID)
+
 			if reason == pool.CloseStopped {
-				delete(streamMedia, session.ID)
 				return
 			}
-
-			delete(streamMedia, session.ID)
 
 			embeds, components := endedCard(i.Message.Embeds, closeLabel(reason))
 			_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Embeds: &embeds, Components: &components})
@@ -387,7 +398,7 @@ func (b *Bot) resolveLiveTV(title string) (*tvapi.Channel, error) {
 		return nil, nil
 	}
 
-	if match := regexp.MustCompile(`^([12]):(\d+)$`).FindStringSubmatch(title); len(match) == 3 {
+	if selectionValueRE.MatchString(title) {
 		return nil, nil
 	}
 
@@ -454,12 +465,11 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 			return b.Resolver.TVStreamURL(streamMedia[session.ID].DaddyID)
 		},
 		OnClose: func(reason pool.CloseReason) {
+			delete(streamMedia, session.ID)
+
 			if reason == pool.CloseStopped {
-				delete(streamMedia, session.ID)
 				return
 			}
-
-			delete(streamMedia, session.ID)
 
 			embeds, components := endedCard(i.Message.Embeds, closeLabel(reason))
 			_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Embeds: &embeds, Components: &components})
@@ -619,8 +629,8 @@ func autocompleteLabel(result febapi.SearchResult) string {
 
 	year := ""
 
-	if result.Title != "" {
-		// year may be present on dynamic fields in search payload; omitted when unknown
+	if result.Year > 0 {
+		year = fmt.Sprintf(" (%d)", result.Year)
 	}
 
 	return truncate(fmt.Sprintf("%s • %s%s", kind, result.Title, year), 100)
@@ -667,7 +677,11 @@ func closeLabel(reason pool.CloseReason) string {
 
 }
 
-func strPtr(value string) *string { return &value }
+func strPtr(value string) *string {
+
+	return &value
+
+}
 
 func minInt(a, b int) int {
 
@@ -682,7 +696,6 @@ func minInt(a, b int) int {
 type episode struct {
 	FID      int
 	Number   int
-	Name     string
 	FileName string
 }
 
@@ -735,7 +748,7 @@ func seasonInfo(name string, ordinal int) struct {
 	Label  string
 } {
 
-	if match := regexp.MustCompile(`(\d+)`).FindStringSubmatch(name); len(match) > 1 {
+	if match := seasonNumberRE.FindStringSubmatch(name); len(match) > 1 {
 		number, _ := strconv.Atoi(match[1])
 		return struct {
 			Number int
@@ -756,7 +769,7 @@ func titleCase(text string) string {
 
 }
 
-func toEpisodes(files []febapi.FebboxFile, season int, details *media.TitleDetails) []episode {
+func toEpisodes(files []febapi.FebboxFile) []episode {
 
 	byNumber := make(map[int]episode)
 	fallback := 0
@@ -770,17 +783,7 @@ func toEpisodes(files []febapi.FebboxFile, season int, details *media.TitleDetai
 			number = fallback
 		}
 
-		name := ""
-
-		if details != nil && details.EpisodeTitles != nil {
-			name = details.EpisodeTitles[fmt.Sprintf("%d:%d", season, number)]
-		}
-
-		if name == "" {
-			name = episodeName(file.FileName, number)
-		}
-
-		candidate := episode{FID: file.FID, Number: number, Name: name, FileName: file.FileName}
+		candidate := episode{FID: file.FID, Number: number, FileName: file.FileName}
 
 		if existing, exists := byNumber[number]; !exists {
 			byNumber[number] = candidate
@@ -808,26 +811,15 @@ func toEpisodes(files []febapi.FebboxFile, season int, details *media.TitleDetai
 
 func sortEpisodes(episodes []episode) {
 
-	for i := 0; i < len(episodes); i++ {
-		for j := i + 1; j < len(episodes); j++ {
-			if episodes[j].Number < episodes[i].Number {
-				episodes[i], episodes[j] = episodes[j], episodes[i]
-			}
-		}
-	}
+	sort.Slice(episodes, func(i, j int) bool {
+		return episodes[i].Number < episodes[j].Number
+	})
 
 }
 
 func episodeNumber(name string) int {
 
-	patterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)s\d{1,2}[ ._-]?e(\d{1,4})`),
-		regexp.MustCompile(`(?i)\b\d{1,2}x(\d{1,4})\b`),
-		regexp.MustCompile(`(?i)\bepisode[ ._-]?(\d{1,4})\b`),
-		regexp.MustCompile(`(?i)\be(\d{1,4})\b`),
-	}
-
-	for _, pattern := range patterns {
+	for _, pattern := range episodeNumberREs {
 		if match := pattern.FindStringSubmatch(name); len(match) > 1 {
 			number, _ := strconv.Atoi(match[1])
 			return number
@@ -835,35 +827,5 @@ func episodeNumber(name string) int {
 	}
 
 	return 0
-
-}
-
-func episodeName(fileName string, number int) string {
-
-	base := regexp.MustCompile(`\.[^.]+$`).ReplaceAllString(fileName, "")
-	base = regexp.MustCompile(`[._-]+`).ReplaceAllString(base, " ")
-	base = regexp.MustCompile(`\s+`).ReplaceAllString(base, " ")
-	base = strings.TrimSpace(base)
-
-	patterns := []*regexp.Regexp{
-		regexp.MustCompile(fmt.Sprintf(`(?i)^.*?s\d{1,2}\s*e0*%d\b\s*[-: ]*`, number)),
-		regexp.MustCompile(fmt.Sprintf(`(?i)^.*?\d{1,2}x0*%d\b\s*[-: ]*`, number)),
-		regexp.MustCompile(fmt.Sprintf(`(?i)^.*?episode\s*0*%d\b\s*[-: ]*`, number)),
-		regexp.MustCompile(fmt.Sprintf(`(?i)^.*?\be0*%d\b\s*[-: ]*`, number)),
-	}
-
-	cleaned := base
-
-	for _, pattern := range patterns {
-		cleaned = pattern.ReplaceAllString(cleaned, "")
-	}
-
-	cleaned = strings.TrimSpace(cleaned)
-
-	if cleaned == "" || cleaned == base || regexp.MustCompile(`(?i)^\d+p\b`).MatchString(cleaned) {
-		return ""
-	}
-
-	return cleaned
 
 }

@@ -24,6 +24,7 @@ type Bot struct {
 	Captions *captions.Fetcher
 }
 
+// New builds a Bot wired to resolver, pool, and persistence.
 func New(resolver *media.Resolver, p *pool.Pool, database *db.Client) (*Bot, error) {
 
 	session, err := discordgo.New("Bot " + config.App.DiscordToken)
@@ -88,18 +89,14 @@ func (b *Bot) registerCommands() error {
 		{Name: "now", Description: "See what is streaming in this server."},
 	}
 
+	guildID := config.App.GuildID
+
 	for _, command := range commands {
 
-		if config.App.GuildID != "" {
-			_, err := b.Session.ApplicationCommandCreate(b.Session.State.User.ID, config.App.GuildID, command)
-			if err != nil {
-				return err
-			}
-		} else {
-			_, err := b.Session.ApplicationCommandCreate(b.Session.State.User.ID, "", command)
-			if err != nil {
-				return err
-			}
+		_, err := b.Session.ApplicationCommandCreate(b.Session.State.User.ID, guildID, command)
+
+		if err != nil {
+			return err
 		}
 
 	}

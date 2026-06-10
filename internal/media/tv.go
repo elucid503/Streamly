@@ -12,10 +12,8 @@ const tvSelectionPrefix = "tv:"
 
 // TVSelection is a live TV channel picked from autocomplete or typed directly.
 type TVSelection struct {
-
 	DaddyID string
 	Channel tvapi.Channel
-
 }
 
 // SearchTV returns catalog channels matching query. An empty query yields popular US channels.
@@ -140,7 +138,6 @@ func TVDetails(channel tvapi.Channel) TitleDetails {
 
 		Title:  channel.Name,
 		Poster: channel.Logo,
-
 	}
 
 }

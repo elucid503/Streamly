@@ -1,15 +1,6 @@
 package media
 
-import (
-	"testing"
-
-	"github.com/joho/godotenv"
-)
-
-func init() {
-	_ = godotenv.Load("../../.env")
-	_ = godotenv.Load(".env")
-}
+import "testing"
 
 func TestStreamFilePreference(t *testing.T) {
 

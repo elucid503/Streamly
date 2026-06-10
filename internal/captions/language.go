@@ -38,10 +38,6 @@ var foreignSubtitleTokens = []string{
 	".bg.", "_bg_", ".bul.", ".bulgarian.",
 }
 
-var englishSubtitleTokens = []string{
-	"english", ".en.", "_en_", ".eng.", " eng", ".english.",
-}
-
 // hasForeignLanguageName reports whether a subtitle filename names a non-English track.
 func hasForeignLanguageName(name string) bool {
 

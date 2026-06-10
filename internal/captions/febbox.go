@@ -23,6 +23,7 @@ type FebboxScanner struct {
 	client *febapi.FebboxClient
 }
 
+// NewFebboxScanner builds a FebboxScanner backed by client.
 func NewFebboxScanner(client *febapi.FebboxClient) *FebboxScanner {
 
 	return &FebboxScanner{client: client}
@@ -37,8 +38,6 @@ type SidecarMatch struct {
 
 // Find scans the folder containing videoFID for a matching subtitle file.
 func (s *FebboxScanner) Find(ctx context.Context, shareKey string, videoFID int, videoName string) (*SidecarMatch, error) {
-
-	_ = ctx
 
 	parent, err := parentFolderForFile(s.client, shareKey, 0, videoFID)
 
@@ -182,6 +181,3 @@ func normalizeName(name string) string {
 	return strings.Join(strings.Fields(replacer.Replace(name)), " ")
 
 }
-
-
-

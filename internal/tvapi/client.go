@@ -13,32 +13,26 @@ import (
 )
 
 const (
-
-	defaultBaseURL = "https://dami-tv.pro"
-	channelsPath = "/data/tv-channels.json?v=302"
+	defaultBaseURL    = "https://dami-tv.pro"
+	channelsPath      = "/data/tv-channels.json?v=302"
 	resolvePathPrefix = "/papi/tv/resolve/"
 
-	catalogTTL = 15 * time.Minute // cache duraiton for the tv-channels.json catalog
-
+	catalogTTL = 15 * time.Minute // How long the tv-channels.json catalog stays cached.
 )
 
 // TVOptions tunes a TVClient instance.
 type TVOptions struct {
-
 	BaseURL string // API base URL. Defaults to TV_BASE_URL env or dami-tv.pro.
-
 }
 
 // TVClient fetches channel listings and resolves HLS streams from dami-tv.pro.
 type TVClient struct {
-
 	baseURL string
-	client *http.Client
+	client  *http.Client
 
 	catalogMu sync.RWMutex
-	catalog *ChannelCatalog
+	catalog   *ChannelCatalog
 	catalogAt time.Time
-
 }
 
 // NewTVClient builds a TVClient with optional overrides.
@@ -47,27 +41,18 @@ func NewTVClient(options TVOptions) *TVClient {
 	baseURL := options.BaseURL
 
 	if baseURL == "" {
-
 		baseURL = os.Getenv("TV_BASE_URL")
-
 	}
 
 	if baseURL == "" {
-
 		baseURL = defaultBaseURL
-
 	}
 
 	return &TVClient{
-
 		baseURL: strings.TrimRight(baseURL, "/"),
-
 		client: &http.Client{
-
 			Timeout: 30 * time.Second,
-
 		},
-
 	}
 
 }
@@ -76,9 +61,7 @@ func NewTVClient(options TVOptions) *TVClient {
 func (c *TVClient) ListChannels() (*ChannelCatalog, error) {
 
 	if cached := c.cachedCatalog(); cached != nil {
-
 		return cached, nil
-
 	}
 
 	u := c.baseURL + channelsPath
@@ -86,9 +69,7 @@ func (c *TVClient) ListChannels() (*ChannelCatalog, error) {
 	response, err := c.get(u)
 
 	if err != nil {
-
 		return nil, fmt.Errorf("fetch channels: %w", err)
-
 	}
 
 	defer response.Body.Close()
@@ -103,9 +84,7 @@ func (c *TVClient) ListChannels() (*ChannelCatalog, error) {
 	var catalog ChannelCatalog
 
 	if err := json.NewDecoder(response.Body).Decode(&catalog); err != nil {
-
 		return nil, fmt.Errorf("decode channels: %w", err)
-
 	}
 
 	c.storeCatalog(&catalog)
@@ -120,9 +99,7 @@ func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
 	daddyID = strings.TrimSpace(daddyID)
 
 	if daddyID == "" {
-
 		return "", fmt.Errorf("daddyId is required")
-
 	}
 
 	u := c.baseURL + resolvePathPrefix + url.PathEscape(daddyID)
@@ -130,9 +107,7 @@ func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
 	response, err := c.get(u)
 
 	if err != nil {
-
 		return "", fmt.Errorf("resolve stream: %w", err)
-
 	}
 
 	defer response.Body.Close()
@@ -140,9 +115,7 @@ func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
 	body, err := io.ReadAll(response.Body)
 
 	if err != nil {
-
 		return "", fmt.Errorf("read resolve response: %w", err)
-
 	}
 
 	if response.StatusCode != http.StatusOK {
@@ -160,9 +133,7 @@ func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
 	var result ResolveResult
 
 	if err := json.Unmarshal(body, &result); err != nil {
-
 		return "", fmt.Errorf("decode resolve response: %w", err)
-
 	}
 
 	if !result.Success {
@@ -170,9 +141,7 @@ func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
 		msg := result.Error
 
 		if msg == "" {
-
 			msg = string(body)
-
 		}
 
 		return "", fmt.Errorf("resolve failed: %s", msg)
@@ -180,23 +149,17 @@ func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
 	}
 
 	if result.Stream == "" {
-
 		return "", fmt.Errorf("resolve failed: empty stream path")
-
 	}
 
 	streamPath := result.Stream
 
 	if strings.HasPrefix(streamPath, "http://") || strings.HasPrefix(streamPath, "https://") {
-
 		return streamPath, nil
-
 	}
 
 	if !strings.HasPrefix(streamPath, "/") {
-
 		streamPath = "/" + streamPath
-
 	}
 
 	return c.baseURL + streamPath, nil
@@ -222,9 +185,7 @@ func (c *TVClient) cachedCatalog() *ChannelCatalog {
 	defer c.catalogMu.RUnlock()
 
 	if c.catalog == nil || time.Since(c.catalogAt) > catalogTTL {
-
 		return nil
-
 	}
 
 	copy := *c.catalog

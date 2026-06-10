@@ -15,13 +15,13 @@ const browserUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/5
 
 // Config holds bot-wide settings sourced from the environment.
 type Config struct {
-	DiscordToken string   // Token for the real, command-handling bot.
-	UserTokens   []string // Selfbot tokens; one streaming slot each.
-	GuildID      string   // When set, slash commands register instantly to this guild.
-	FebboxCookie  string // The `ui` cookie used to fetch Febbox media.
-	MongoURI      string // MongoDB connection string for Streamly persistence.
-	IntroDBAPIKey          string // Optional bearer token for TheIntroDB reads.
-	SubDLAPIKey string // Subtitle provider; free tier allows 2,000 searches/day.
+	DiscordToken  string   // Token for the real, command-handling bot.
+	UserTokens    []string // Selfbot tokens; one streaming slot each.
+	GuildID       string   // When set, slash commands register instantly to this guild.
+	FebboxCookie  string   // The `ui` cookie used to fetch Febbox media.
+	MongoURI      string   // MongoDB connection string for Streamly persistence.
+	IntroDBAPIKey string   // Optional bearer token for TheIntroDB reads.
+	SubDLAPIKey   string   // Subtitle provider; free tier allows 2,000 searches/day.
 }
 
 // StreamOptions holds libav transcode targets for every stream.
@@ -54,13 +54,13 @@ func init() {
 	loadDotEnv()
 
 	App = Config{
-		DiscordToken: required("DISCORD_TOKEN"),
-		UserTokens:   parseTokens(os.Getenv("USER_TOKENS")),
-		GuildID:      os.Getenv("GUILD_ID"),
+		DiscordToken:  required("DISCORD_TOKEN"),
+		UserTokens:    parseTokens(os.Getenv("USER_TOKENS")),
+		GuildID:       os.Getenv("GUILD_ID"),
 		FebboxCookie:  required("FEBBOX_UI_COOKIE"),
 		MongoURI:      required("MONGO_URI"),
-		IntroDBAPIKey:         envString("INTRODB_API_KEY", ""),
-		SubDLAPIKey: envString("SUBDL_API_KEY", ""),
+		IntroDBAPIKey: envString("INTRODB_API_KEY", ""),
+		SubDLAPIKey:   envString("SUBDL_API_KEY", ""),
 	}
 
 	Stream = StreamOptions{
@@ -120,21 +120,12 @@ func TVStreamHeaders() map[string]string {
 // loadDotEnv reads a .env file into the process environment before config init.
 func loadDotEnv() {
 
-	candidates := []string{".env"}
-
-	for _, path := range candidates {
-
-		if _, err := os.Stat(path); err != nil {
-			continue
-		}
-
-		if err := godotenv.Load(path); err != nil {
-			log.Printf("[config] could not load %s: %v", path, err)
-			continue
-		}
-
+	if _, err := os.Stat(".env"); err != nil {
 		return
+	}
 
+	if err := godotenv.Load(".env"); err != nil {
+		log.Printf("[config] could not load .env: %v", err)
 	}
 
 }

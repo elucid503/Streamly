@@ -1,14 +1,6 @@
 //go:build cgo
 
 // Package transcode re-encodes media with libav via CGO (no ffmpeg binary).
-//
-// Required development packages (Debian/Ubuntu names):
-//   - libavformat-dev
-//   - libavcodec-dev
-//   - libavfilter-dev
-//   - libavutil-dev
-//   - libswresample-dev
-//   - libx264-dev
 package transcode
 
 /*

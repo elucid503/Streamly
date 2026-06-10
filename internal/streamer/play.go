@@ -14,7 +14,6 @@ import (
 const audioCorrectionThreshold = 350 * time.Millisecond
 
 // Playback owns one Go Live stream and splices successive transcode sessions into it.
-// /seek swaps the input by running a new session; the Discord stream never restarts.
 type Playback struct {
 	streamer   *Streamer
 	streamConn *StreamConnection
@@ -50,7 +49,6 @@ func OpenPlayback(ctx context.Context, s *Streamer) (*Playback, error) {
 }
 
 // Run plays one transcode session into the open stream and blocks until it ends.
-// Calling Run again continues the same Discord stream with a new input.
 func (p *Playback) Run(ctx context.Context, ts *transcode.Session) error {
 
 	p.sender.beginSegment()
@@ -81,8 +79,7 @@ type mediaSender struct {
 	gapPending bool      // The next send must first cover the dead air since lastRTPAt.
 }
 
-// beginSegment resets pacing for a new transcode session. The RTP gap to the previous
-// session is applied lazily at the first send, once the new pipeline actually produces.
+// beginSegment resets pacing for a new transcode session; the RTP gap applies at the first send.
 func (s *mediaSender) beginSegment() {
 
 	s.pauseMu.Lock()
@@ -106,10 +103,7 @@ func (s *mediaSender) markRTP() {
 
 }
 
-// applySegmentGap advances the RTP timeline across the dead air between the previous
-// session's last packet and this session's first, mirroring what pause/resume does.
-// Timestamps must track wall time: when they lag, the receiver re-buffers audio late
-// while still rendering video on arrival, drifting A/V apart until it force-resyncs.
+// applySegmentGap advances the RTP timeline across dead air between sessions, like pause/resume.
 func (s *mediaSender) applySegmentGap(peer *MediaPeer) {
 
 	s.rtpMu.Lock()
@@ -318,10 +312,7 @@ type mediaClock struct {
 	anchored  bool
 }
 
-// wait blocks until the shared clock reaches pts. It anchors once on the first packet seen across both
-// feeds; a feed that starts late (x264 buffers frames before audio) simply fast-forwards its backlog to
-// catch up rather than re-anchoring, which would corrupt the other feed's pacing.
-// extraDelay slows consumption when a live jitter cushion is over-full.
+// wait blocks until the shared clock reaches pts; extraDelay slows live jitter when the cushion is full.
 func (c *mediaClock) wait(ctx context.Context, pts time.Duration, extraDelay time.Duration) bool {
 
 	c.mu.Lock()

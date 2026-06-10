@@ -5,11 +5,11 @@ import "testing"
 func TestHasForeignLanguageName(t *testing.T) {
 
 	cases := map[string]bool{
-		"The.Sopranos.S02E10.BluRay.srt":     false,
-		"The.Sopranos.S02E10.ar.srt":         true,
-		"show.en.srt":                        false,
-		"show.hi.srt":                        false,
-		"show.hindi.srt":                     true,
+		"The.Sopranos.S02E10.BluRay.srt": false,
+		"The.Sopranos.S02E10.ar.srt":     true,
+		"show.en.srt":                    false,
+		"show.hi.srt":                    false,
+		"show.hindi.srt":                 true,
 		"the-sopranos-second-season_2_HI_english-3219271.zip": false,
 	}
 

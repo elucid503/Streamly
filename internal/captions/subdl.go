@@ -75,11 +75,15 @@ func NewSubDLClient(options SubDLOptions) *SubDLClient {
 }
 
 func (c *SubDLClient) Name() string {
+
 	return "SubDL"
+
 }
 
 func (c *SubDLClient) Configured() bool {
+
 	return c.apiKey != ""
+
 }
 
 func (c *SubDLClient) Download(ctx context.Context, query Query, destPath string) (string, error) {
@@ -261,8 +265,7 @@ func pickSubDLEpisodePaths(response subdlSearchResponse, season, episode int) []
 
 	var paths []string
 
-	// Season-pack unpack files are the most reliable source. Metadata fields are often wrong,
-	// so match by filename first.
+	// Season-pack unpack files are the most reliable source; match by filename first.
 	for _, subtitle := range response.Subtitles {
 
 		for _, file := range subtitle.UnpackFiles {
@@ -478,8 +481,7 @@ func (c *SubDLClient) downloadBytes(ctx context.Context, path string) ([]byte, e
 		path = "/" + path
 	}
 
-	// Free API keys search with api_key but download through the anonymous quota.
-	// Passing api_key on dl.subdl.com requires a paid plan (HTTP 402 otherwise).
+	// Free API keys search with api_key but download anonymously; api_key on dl.subdl.com requires a paid plan.
 	downloadURL := subDLDownload + path
 
 	resp, err := c.http.R().SetContext(ctx).Get(downloadURL)

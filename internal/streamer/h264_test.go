@@ -11,16 +11,16 @@ func TestBitstreamRoundTrip(t *testing.T) {
 
 	w := &bitWriter{}
 
-	w.writeBits(0x67, 8)  // NAL header
-	w.writeUE(0)          // small ue
-	w.writeUE(5)          // multi-bit ue
-	w.writeUE(100)        // larger ue
-	w.writeSE(-3)         // negative se
-	w.writeSE(7)          // positive se
-	w.writeSE(0)          // zero se
-	w.writeBits(0, 8)     // force an emulation sequence: 00 00 ...
+	w.writeBits(0x67, 8) // NAL header
+	w.writeUE(0)         // small ue
+	w.writeUE(5)         // multi-bit ue
+	w.writeUE(100)       // larger ue
+	w.writeSE(-3)        // negative se
+	w.writeSE(7)         // positive se
+	w.writeSE(0)         // zero se
+	w.writeBits(0, 8)    // force an emulation sequence: 00 00 ...
 	w.writeBits(0, 8)
-	w.writeBits(2, 8)     // ... 02 (<=3) triggers a 00 00 03 insertion
+	w.writeBits(2, 8) // ... 02 (<=3) triggers a 00 00 03 insertion
 	w.writeBits(1, 1)
 	w.flush()
 
@@ -111,22 +111,22 @@ func TestRewriteSPSVUIInjectsRestriction(t *testing.T) {
 	// Re-parse the rewritten SPS up to the VUI and confirm the restriction block is present with
 	// max_num_reorder_frames = 0.
 	r := newBitReader(out[1:])
-	r.readBits(8)  // profile
-	r.readBits(8)  // constraints
-	r.readBits(8)  // level
-	r.readUE()     // sps id
-	r.readUE()     // log2_max_frame_num
+	r.readBits(8)        // profile
+	r.readBits(8)        // constraints
+	r.readBits(8)        // level
+	r.readUE()           // sps id
+	r.readUE()           // log2_max_frame_num
 	if r.readUE() != 0 { // pic_order_cnt_type
 		t.Fatal("pic_order_cnt_type mismatch")
 	}
-	r.readUE()     // log2_max_pic_order_cnt_lsb
-	r.readUE()     // max_num_ref_frames
-	r.readBits(1)  // gaps
-	r.readUE()     // width
-	r.readUE()     // height
-	r.readBits(1)  // frame_mbs_only
-	r.readBits(1)  // direct_8x8
-	r.readBits(1)  // frame_cropping
+	r.readUE()    // log2_max_pic_order_cnt_lsb
+	r.readUE()    // max_num_ref_frames
+	r.readBits(1) // gaps
+	r.readUE()    // width
+	r.readUE()    // height
+	r.readBits(1) // frame_mbs_only
+	r.readBits(1) // direct_8x8
+	r.readBits(1) // frame_cropping
 
 	if r.readBits(1) != 1 {
 		t.Fatal("vui_parameters_present_flag should be 1 after rewrite")

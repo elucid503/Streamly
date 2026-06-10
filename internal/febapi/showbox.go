@@ -448,4 +448,3 @@ func pkcs7Pad(data []byte, blockSize int) []byte {
 	return append(data, padText...)
 
 }
-

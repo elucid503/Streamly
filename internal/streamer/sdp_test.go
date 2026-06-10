@@ -30,4 +30,3 @@ func TestExtractAckSDPPrefersSDPField(t *testing.T) {
 	}
 
 }
-

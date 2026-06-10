@@ -34,14 +34,14 @@ type InputReader interface {
 
 // Request describes one libav transcode job fed from in-process media readers.
 type Request struct {
-	Source   InputReader // Progressive media, muxed audio+video.
-	InputURL string      // Direct media URL; HLS uses libavformat's in-process demuxer.
-	Headers  map[string]string
-	Start    time.Duration // Initial playback position; 0 plays from the beginning.
-	Live     bool          // Live HLS: widen packet queues and let playback hold a jitter cushion.
-	Caption      string // Log tag and stats label.
-	SubtitlePath string // External subtitle file for burn-in; empty disables captions.
-	FontsDir     string // Directory containing font.ttf for libass.
+	Source       InputReader // Progressive media, muxed audio+video.
+	InputURL     string      // Direct media URL; HLS uses libavformat's in-process demuxer.
+	Headers      map[string]string
+	Start        time.Duration // Initial playback position; 0 plays from the beginning.
+	Live         bool          // Live HLS: widen packet queues and let playback hold a jitter cushion.
+	Caption      string        // Log tag and stats label.
+	SubtitlePath string        // External subtitle file for burn-in; empty disables captions.
+	FontsDir     string        // Directory containing font.ttf for libass.
 	Context      context.Context
 
 	OnDuration func(durationMs int64) // Called once when the container duration is known.
@@ -49,9 +49,9 @@ type Request struct {
 
 // Session is a running transcode: encoded video/audio feeds, completion state, and pause control.
 type Session struct {
-	Video <-chan Packet
-	Audio <-chan Packet
-	Done  <-chan error
+	Video  <-chan Packet
+	Audio  <-chan Packet
+	Done   <-chan error
 	Jitter *LiveJitter // Live HLS cushion tracker; nil for VOD.
 
 	pause *pauseState

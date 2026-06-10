@@ -73,10 +73,13 @@ func channelLabel(channelID string) string {
 func subtitlesLabel(stats pool.Stats) string {
 
 	if stats.CaptionsEnabled {
+
 		if stats.CaptionSource != "" {
 			return "On (" + stats.CaptionSource + ")"
 		}
+
 		return "On"
+
 	}
 
 	return "Off"
