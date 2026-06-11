@@ -6,6 +6,7 @@
 
 #define STREAMLY_KIND_VIDEO 0
 #define STREAMLY_KIND_AUDIO 1
+#define STREAMLY_MAX_CTA 4
 
 // Whence values for streamly_seek_cb; 0..2 match SEEK_SET/SEEK_CUR/SEEK_END.
 #define STREAMLY_SEEK_SIZE 3
@@ -23,6 +24,12 @@ typedef int64_t (*streamly_seek_cb)(uintptr_t user, int64_t offset, int whence);
 // streamly_meta_cb reports the container duration in ms (or -1 when unknown) once probing finishes.
 typedef void (*streamly_meta_cb)(uintptr_t user, int64_t duration_ms);
 
+typedef struct {
+    char text[192];
+    int64_t start_ms;
+    int64_t end_ms;
+} streamly_cta_t;
+
 // transcode_params_t mirrors config.Stream for the libav pipeline.
 typedef struct {
     int width;                  // Output frame width.
@@ -35,6 +42,10 @@ typedef struct {
 
     const char *subtitle_path;  // External SRT/VTT/ASS for the subtitles filter; NULL disables burn-in.
     const char *fonts_dir;      // Directory passed to libass fontsdir=; NULL uses libass defaults.
+    const char *cta_font_path;  // Font file for drawtext overlays; NULL disables CTAs.
+
+    int cta_count;
+    streamly_cta_t ctas[STREAMLY_MAX_CTA];
 
     streamly_read_cb read_cb;   // Byte-seekable Go media source; NULL when input_url is set.
     streamly_seek_cb seek_cb;   // Byte seek into the Go media source; enables av_seek_frame.

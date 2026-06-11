@@ -96,7 +96,7 @@ func (b *Bot) introLookupFailedEmbed(session *pool.Session, err error) *discordg
 
 func (b *Bot) resolveIntroSkipTarget(session *pool.Session, current time.Duration) (time.Duration, error) {
 
-	target, ok := streamMedia[session.ID]
+	target, ok := streamTargetFromSession(session)
 	if !ok {
 		return 0, errors.New("no stream metadata")
 	}
@@ -131,7 +131,7 @@ func skipIntroEligible(session *pool.Session) bool {
 		return false
 	}
 
-	target, ok := streamMedia[session.ID]
+	target, ok := streamTargetFromSession(session)
 	if !ok {
 		return false
 	}

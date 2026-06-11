@@ -74,7 +74,7 @@ A fresh clone does not include libdatachannel sources (only an empty `third_part
 scripts/build-libdatachannel.sh
 ```
 
-This clones libdatachannel v0.24.0 into `third_party/libdatachannel/` and produces `third_party/libdatachannel/build/libdatachannel.a`. Requires `cmake`, `git`, and `libssl-dev`.
+This clones libdatachannel v0.24.0 into `third_party/libdatachannel/` and produces `third_party/libdatachannel/build/libdatachannel-static.a`. Requires `cmake`, `git`, and `libssl-dev`.
 
 ## Configuration
 

@@ -26,7 +26,7 @@ func (b *Bot) handleNow(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	target, ok := streamMedia[session.ID]
+	target, ok := streamTargetFromSession(session)
 
 	if !ok {
 		respondEmbed(s, i, nowFallbackEmbed(b.Pool, session))

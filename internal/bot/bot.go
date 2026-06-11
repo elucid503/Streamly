@@ -2,6 +2,7 @@ package bot
 
 import (
 	"log"
+	"sync"
 
 	"github.com/bwmarrin/discordgo"
 
@@ -20,8 +21,11 @@ type Bot struct {
 	Resolver *media.Resolver
 	Pool     *pool.Pool
 	DB       *db.Client
-	IntroDB  *introdb.Client
+	IntroDB  *introdb.CachedClient
 	Captions *captions.Fetcher
+	autoNext    map[string]*autoNextState
+	autoNextMu  sync.Mutex
+	autoNextGen uint64
 }
 
 // New builds a Bot wired to resolver, pool, and persistence.
@@ -44,8 +48,9 @@ func New(resolver *media.Resolver, p *pool.Pool, database *db.Client) (*Bot, err
 		Resolver: resolver,
 		Pool:     p,
 		DB:       database,
-		IntroDB:  introdb.NewClient(introdb.ClientOptions{APIKey: config.App.IntroDBAPIKey}),
+		IntroDB:  introdb.NewCachedClient(introdb.NewClient(introdb.ClientOptions{APIKey: config.App.IntroDBAPIKey})),
 		Captions: captions.NewFetcher(febapi.NewFebboxClient(febapi.FebboxOptions{Cookie: config.App.FebboxCookie}), subtitleProviders, config.FebboxStreamHeaders()),
+		autoNext: make(map[string]*autoNextState),
 	}
 
 	session.AddHandler(bot.onInteraction)
@@ -183,6 +188,8 @@ func (b *Bot) onComponent(s *discordgo.Session, i *discordgo.InteractionCreate) 
 		}
 	case "channels":
 		b.handleChannelsComponent(s, i, parts)
+	case "autonext":
+		b.handleAutoNextButton(s, i, parts)
 	}
 
 }

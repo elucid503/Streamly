@@ -33,7 +33,7 @@ func (b *Bot) handleSubtitles(s *discordgo.Session, i *discordgo.InteractionCrea
 		return
 	}
 
-	target, ok := streamMedia[session.ID]
+	target, ok := streamTargetFromSession(session)
 
 	if !ok {
 		respondEmbed(s, i, controlEmbed(b.Pool, session, "Subtitles Unavailable", "Couldn't identify this stream for subtitle lookup."))
@@ -68,6 +68,8 @@ func (b *Bot) disableSubtitles(s *discordgo.Session, i *discordgo.InteractionCre
 	if !enabled {
 		respondEmbed(s, i, controlEmbed(b.Pool, session, "Subtitles Disabled", "Subtitles are now off."))
 	}
+
+	_ = b.DB.SetCaptionsEnabled(context.Background(), i.GuildID, false)
 
 }
 
@@ -107,6 +109,7 @@ func (b *Bot) enableSubtitles(s *discordgo.Session, i *discordgo.InteractionCrea
 
 			if enabled {
 				respondEmbed(s, i, controlEmbed(b.Pool, session, "Subtitles Enabled", "Subtitles are now on."))
+				_ = b.DB.SetCaptionsEnabled(context.Background(), i.GuildID, true)
 			}
 
 			return
@@ -147,6 +150,8 @@ func (b *Bot) enableSubtitles(s *discordgo.Session, i *discordgo.InteractionCrea
 	if enabled {
 		respondEmbed(s, i, controlEmbed(b.Pool, session, "Subtitles Enabled", "Subtitles are now on."))
 	}
+
+	_ = b.DB.SetCaptionsEnabled(context.Background(), i.GuildID, true)
 
 }
 

@@ -18,8 +18,9 @@ const (
 
 // Client wraps Streamly's MongoDB collections.
 type Client struct {
-	client  *mongo.Client
-	history *mongo.Collection
+	client      *mongo.Client
+	history     *mongo.Collection
+	preferences *mongo.Collection
 }
 
 // HistoryEntry is a saved stream selection for a user.

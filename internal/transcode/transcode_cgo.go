@@ -17,6 +17,7 @@ extern void streamlyTranscodeEmit(uintptr_t user, int kind, uint8_t *data, int l
 extern int streamlyInputRead(uintptr_t user, uint8_t *buf, int len);
 extern int64_t streamlyInputSeek(uintptr_t user, int64_t offset, int whence);
 extern void streamlyTranscodeMeta(uintptr_t user, int64_t duration_ms);
+extern void streamly_fill_ctas(uintptr_t user, transcode_params_t *params);
 */
 import "C"
 
@@ -46,7 +47,9 @@ type emitTarget struct {
 	video      chan<- Packet
 	audio      chan<- Packet
 	input      InputReader
-	onDuration func(durationMs int64)
+	onDuration     func(durationMs int64)
+	probedDuration int64
+	supplyCTAs     func(probedDurationMs int64, startMs int64) (fontPath string, windows []CTAWindow)
 }
 
 var (
@@ -192,13 +195,54 @@ func streamlyTranscodeMeta(user C.uintptr_t, durationMs C.int64_t) {
 
 	target := emitTargetByID(uintptr(user))
 
-	if target == nil || target.onDuration == nil {
+	if target == nil {
 		return
 	}
 
-	if durationMs > 0 {
+	target.probedDuration = int64(durationMs)
+
+	if durationMs > 0 && target.onDuration != nil {
 		target.onDuration(int64(durationMs))
 	}
+
+}
+
+//export streamly_fill_ctas
+func streamly_fill_ctas(user C.uintptr_t, params *C.transcode_params_t) {
+
+	target := emitTargetByID(uintptr(user))
+
+	if target == nil || target.supplyCTAs == nil || params == nil {
+		return
+	}
+
+	fontPath, windows := target.supplyCTAs(target.probedDuration, int64(params.start_ms))
+
+	if fontPath != "" {
+		if params.cta_font_path != nil {
+			C.free(unsafe.Pointer(params.cta_font_path))
+		}
+
+		params.cta_font_path = C.CString(fontPath)
+	}
+
+	ctaCount := 0
+
+	for _, window := range windows {
+
+		if ctaCount >= int(C.STREAMLY_MAX_CTA) || window.Text == "" {
+			continue
+		}
+
+		copyCTAText(&params.ctas[ctaCount].text[0], truncateCTAText(window.Text, 191))
+
+		params.ctas[ctaCount].start_ms = C.int64_t(window.StartMs)
+		params.ctas[ctaCount].end_ms = C.int64_t(window.EndMs)
+		ctaCount++
+
+	}
+
+	params.cta_count = C.int(ctaCount)
 
 }
 
@@ -225,6 +269,7 @@ func startNative(request Request) (*Session, error) {
 		audio:      audio,
 		input:      request.Source,
 		onDuration: request.OnDuration,
+		supplyCTAs: request.SupplyCTAs,
 	}
 
 	id := registerEmitTarget(target)
@@ -259,7 +304,7 @@ func startNative(request Request) (*Session, error) {
 
 	}()
 
-	var inputURLCString, headersCString, subtitleCString, fontsCString *C.char
+	var inputURLCString, headersCString, subtitleCString, fontsCString, ctaFontCString *C.char
 
 	if request.SubtitlePath != "" {
 		subtitleCString = C.CString(request.SubtitlePath)
@@ -267,6 +312,10 @@ func startNative(request Request) (*Session, error) {
 
 	if request.FontsDir != "" {
 		fontsCString = C.CString(request.FontsDir)
+	}
+
+	if request.CTAFontPath != "" {
+		ctaFontCString = C.CString(request.CTAFontPath)
 	}
 
 	if request.InputURL != "" {
@@ -284,6 +333,7 @@ func startNative(request Request) (*Session, error) {
 		threads:             C.int(config.Stream.Threads),
 		subtitle_path:       subtitleCString,
 		fonts_dir:           fontsCString,
+		cta_font_path:       ctaFontCString,
 		input_url:           inputURLCString,
 		headers:             headersCString,
 		start_ms:            C.int64_t(request.Start.Milliseconds()),
@@ -294,6 +344,24 @@ func startNative(request Request) (*Session, error) {
 		abort_flag:          abortFlag,
 	}
 
+	ctaCount := 0
+
+	for _, window := range request.CTAs {
+
+		if ctaCount >= int(C.STREAMLY_MAX_CTA) || window.Text == "" {
+			continue
+		}
+
+		copyCTAText(&params.ctas[ctaCount].text[0], truncateCTAText(window.Text, 191))
+
+		params.ctas[ctaCount].start_ms = C.int64_t(window.StartMs)
+		params.ctas[ctaCount].end_ms = C.int64_t(window.EndMs)
+		ctaCount++
+
+	}
+
+	params.cta_count = C.int(ctaCount)
+
 	if request.Source != nil {
 		params.read_cb = C.streamly_read_cb(C.streamlyInputRead)
 		params.seek_cb = C.streamly_seek_cb(C.streamlyInputSeek)
@@ -303,6 +371,7 @@ func startNative(request Request) (*Session, error) {
 
 	freeCString(subtitleCString)
 	freeCString(fontsCString)
+	freeCString(ctaFontCString)
 	freeCString(inputURLCString)
 	freeCString(headersCString)
 
@@ -346,10 +415,10 @@ func startNative(request Request) (*Session, error) {
 	}()
 
 	return &Session{
-		Video:  video,
-		Audio:  audio,
-		Done:   done,
-		pause:  pause,
+		Video: video,
+		Audio: audio,
+		Done:  done,
+		pause: pause,
 	}, nil
 
 }
@@ -407,6 +476,32 @@ func freeCString(value *C.char) {
 	if value != nil {
 		C.free(unsafe.Pointer(value))
 	}
+
+}
+
+func copyCTAText(dest *C.char, text string) {
+
+	limit := len(text)
+
+	if limit > 191 {
+		limit = 191
+	}
+
+	for index := 0; index < limit; index++ {
+		*(*C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(dest)) + uintptr(index))) = C.char(text[index])
+	}
+
+	*(*C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(dest)) + uintptr(limit))) = 0
+
+}
+
+func truncateCTAText(text string, max int) string {
+
+	if len(text) <= max {
+		return text
+	}
+
+	return text[:max]
 
 }
 

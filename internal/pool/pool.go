@@ -12,6 +12,7 @@ import (
 
 	"streamly/internal/captions"
 	"streamly/internal/config"
+
 	"streamly/internal/selfbot"
 	"streamly/internal/source"
 	"streamly/internal/streamer"
@@ -49,6 +50,10 @@ type Request struct {
 	Headers        map[string]string        // HTTP headers for HLS/direct input; defaults to Febbox when nil.
 	ResolveHeaders func() map[string]string // Optional live-TV header refresh on reconnect.
 	Live           bool                     // Live streams cannot be paused and re-resolve on expiry.
+	Metadata       *StreamMetadata          // Optional VOD/live context for handlers and hooks.
+	OnPrepare      func(*Session)             // Called before playback; warms captions and intro timing.
+	OnMediaProbed  func(*Session, int64)      // Called when container duration is known, before the filter graph is built.
+	OnNearEnd      func()                     // Called once when credits begin on a TV episode.
 	OnClose        func(CloseReason)
 }
 
@@ -80,6 +85,13 @@ type Session struct {
 	FontsDir        string
 	CaptionSource   string
 	CaptionQueryKey string
+
+	Metadata           *StreamMetadata
+	ctaFontPath        string
+	pendingSegmentCTAs []SegmentCTA
+	timedCTAs          []TimedCTA
+	creditsTriggerMs   int64
+	nearEndTriggered   bool
 }
 
 func (session *Session) setSegmentCancel(cancel context.CancelFunc) {
@@ -212,6 +224,12 @@ func (p *Pool) Acquire(guildID string) (*Session, error) {
 	session.FontsDir = ""
 	session.CaptionSource = ""
 	session.CaptionQueryKey = ""
+	session.Metadata = nil
+	session.ctaFontPath = ""
+	session.pendingSegmentCTAs = nil
+	session.timedCTAs = nil
+	session.creditsTriggerMs = 0
+	session.nearEndTriggered = false
 
 	return session, nil
 
@@ -353,6 +371,12 @@ func (p *Pool) Play(ctx context.Context, session *Session, request Request) erro
 		}
 	})
 
+	session.Metadata = request.Metadata
+
+	if request.OnPrepare != nil {
+		request.OnPrepare(session)
+	}
+
 	go p.runLoop(session, request)
 
 	return nil
@@ -372,7 +396,7 @@ func (p *Pool) Stop(session *Session) {
 
 func (p *Pool) Pause(session *Session) {
 
-	if session.Paused || !session.Busy {
+	if session.Paused || !session.Busy || session.Live() {
 		return
 	}
 
@@ -485,6 +509,12 @@ func (p *Pool) Release(session *Session) {
 	session.FontsDir = ""
 	session.CaptionSource = ""
 	session.CaptionQueryKey = ""
+	session.Metadata = nil
+	session.ctaFontPath = ""
+	session.pendingSegmentCTAs = nil
+	session.timedCTAs = nil
+	session.creditsTriggerMs = 0
+	session.nearEndTriggered = false
 
 	session.Streamer.SetOnVoiceLeave(nil)
 	session.Streamer.LeaveVoice()
@@ -519,6 +549,10 @@ func (p *Pool) runLoop(session *Session, request Request) {
 	ctx, cancel := context.WithCancel(context.Background())
 	session.controller = cancel
 
+	if request.OnNearEnd != nil {
+		go p.monitorPlayback(ctx, session, request)
+	}
+
 	playErr := p.stream(ctx, session, request)
 
 	if session.StopRequested {
@@ -529,6 +563,11 @@ func (p *Pool) runLoop(session *Session, request Request) {
 	}
 
 	cancel()
+
+	if reason == CloseEnded && request.OnNearEnd != nil && !session.nearEndTriggered {
+		request.OnNearEnd()
+	}
+
 	p.Release(session)
 
 	if request.OnClose != nil {
@@ -587,10 +626,14 @@ func (p *Pool) playProgressive(ctx context.Context, session *Session, playback *
 
 		session.media = media
 
-		playErr, transErr := p.runSegment(ctx, session, playback, transcode.Request{
+		treq := transcode.Request{
 			Source:  media,
 			Caption: request.Caption,
-		}, offset, media.Destroy)
+		}
+
+		session.enrichTranscodeRequest(&treq, offset)
+
+		playErr, transErr := p.runSegment(ctx, session, playback, treq, offset, media.Destroy)
 
 		session.media = nil
 
@@ -697,11 +740,15 @@ func (p *Pool) playVodHLS(ctx context.Context, session *Session, playback *strea
 
 		started := time.Now()
 
-		playErr, transErr := p.runSegment(ctx, session, playback, transcode.Request{
+		treq := transcode.Request{
 			InputURL: url,
 			Headers:  headers,
 			Caption:  request.Caption,
-		}, 0, nil)
+		}
+
+		session.enrichTranscodeRequest(&treq, 0)
+
+		playErr, transErr := p.runSegment(ctx, session, playback, treq, 0, nil)
 
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -856,12 +903,24 @@ func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *stre
 
 		segmentStart := time.Now()
 
-		playErr, transErr := p.runSegment(ctx, session, playback, transcode.Request{
+		if attempt == 0 {
+			session.pendingSegmentCTAs = nil
+		} else if consecutiveFailures > 1 {
+			session.pendingSegmentCTAs = []SegmentCTA{{Text: "The live stream provider is degraded", DurationMs: liveCTADurationMs}}
+		} else {
+			session.pendingSegmentCTAs = []SegmentCTA{{Text: "The live stream has restarted", DurationMs: liveCTADurationMs}}
+		}
+
+		treq := transcode.Request{
 			InputURL: url,
 			Headers:  headers,
 			Caption:  request.Caption,
 			Live:     true,
-		}, 0, nil)
+		}
+
+		session.enrichTranscodeRequest(&treq, 0)
+
+		playErr, transErr := p.runSegment(ctx, session, playback, treq, 0, nil)
 
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -906,7 +965,29 @@ func (p *Pool) runSegment(ctx context.Context, session *Session, playback *strea
 
 	treq.Start = offset
 	treq.Context = segCtx
-	treq.OnDuration = func(ms int64) { session.stats.DurationMs = &ms }
+	treq.SupplyCTAs = func(probedDurationMs int64, startMs int64) (string, []transcode.CTAWindow) {
+
+		if probedDurationMs > 0 {
+			session.stats.DurationMs = &probedDurationMs
+
+			if session.request != nil && session.request.OnMediaProbed != nil {
+				session.request.OnMediaProbed(session, probedDurationMs)
+			}
+
+			session.armCreditsTrigger(probedDurationMs)
+		}
+
+		offset := time.Duration(startMs) * time.Millisecond
+		windows := session.buildCTAWindows(offset)
+		fontPath := session.ctaFontPath
+
+		if fontPath == "" {
+			return "", windows
+		}
+
+		return fontPath, windows
+
+	}
 
 	if session.Captions != nil && session.Captions.Enabled() {
 		treq.SubtitlePath = session.Captions.Path()

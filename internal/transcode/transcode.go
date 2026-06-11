@@ -32,6 +32,13 @@ type InputReader interface {
 	Size() int64
 }
 
+// CTAWindow is a timed on-stream callout burned in at the bottom-left via drawtext.
+type CTAWindow struct {
+	Text    string
+	StartMs int64
+	EndMs   int64
+}
+
 // Request describes one libav transcode job fed from in-process media readers.
 type Request struct {
 	Source       InputReader // Progressive media, muxed audio+video.
@@ -42,9 +49,14 @@ type Request struct {
 	Caption      string        // Log tag and stats label.
 	SubtitlePath string        // External subtitle file for burn-in; empty disables captions.
 	FontsDir     string        // Directory containing font.ttf for libass.
+	CTAFontPath  string        // Font file for drawtext overlays; empty disables CTAs.
+	CTAs         []CTAWindow   // Timed bottom-left callouts for this segment.
 	Context      context.Context
 
 	OnDuration func(durationMs int64) // Called once when the container duration is known.
+
+	// SupplyCTAs builds drawtext overlays after probing, immediately before the filter graph is built.
+	SupplyCTAs func(probedDurationMs int64, startMs int64) (fontPath string, windows []CTAWindow)
 }
 
 // Session is a running transcode: encoded video/audio feeds, completion state, and pause control.

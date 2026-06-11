@@ -6,12 +6,57 @@ LIBDC="$ROOT/third_party/libdatachannel"
 
 CMAKE="$(command -v cmake)"
 
-if [[ ! -f "$LIBDC/include/rtc/rtc.hpp" ]]; then
-	rm -rf "$LIBDC"
-	git clone --depth 1 --branch v0.24.0 https://github.com/paullouisageneau/libdatachannel.git "$LIBDC"
-fi
+REQUIRED_DEPS=(plog usrsctp libjuice json libsrtp)
 
-git -C "$LIBDC" submodule update --init --recursive --depth 1
+deps_present() {
+
+	for dep in "${REQUIRED_DEPS[@]}"; do
+		if [[ ! -d "$LIBDC/deps/$dep" ]]; then
+			return 1
+		fi
+	done
+
+	return 0
+
+}
+
+is_git_checkout() {
+
+	[[ -d "$LIBDC/.git" ]] && git -C "$LIBDC" rev-parse --is-inside-work-tree &>/dev/null
+
+}
+
+sync_submodules() {
+
+	if ! is_git_checkout; then
+		return 0
+	fi
+
+	git -C "$LIBDC" submodule update --init --recursive --depth 1
+
+}
+
+ensure_sources() {
+
+	if [[ -f "$LIBDC/include/rtc/rtc.hpp" ]] && deps_present; then
+		return 0
+	fi
+
+	echo "fetching libdatachannel v0.24.0 with submodules..." >&2
+	rm -rf "$LIBDC"
+
+	git clone --depth 1 --branch v0.24.0 --recurse-submodules --shallow-submodules \
+		https://github.com/paullouisageneau/libdatachannel.git "$LIBDC"
+
+}
+
+ensure_sources
+sync_submodules
+
+if ! deps_present; then
+	echo "libdatachannel dependencies are missing under $LIBDC/deps" >&2
+	exit 1
+fi
 
 mkdir -p "$LIBDC/build"
 "$CMAKE" -S "$LIBDC" -B "$LIBDC/build" \
@@ -22,5 +67,13 @@ mkdir -p "$LIBDC/build"
 	-DNO_WEBSOCKET=ON \
 	-DNO_MEDIA=OFF
 
-"$CMAKE" --build "$LIBDC/build" -j"$(nproc)"
-echo "libdatachannel built at $LIBDC/build/libdatachannel.a"
+"$CMAKE" --build "$LIBDC/build" --target datachannel-static -j"$(nproc)"
+
+STATIC_LIB="$LIBDC/build/libdatachannel-static.a"
+
+if [[ ! -f "$STATIC_LIB" ]]; then
+	echo "expected static library missing: $STATIC_LIB" >&2
+	exit 1
+fi
+
+echo "libdatachannel built at $STATIC_LIB"

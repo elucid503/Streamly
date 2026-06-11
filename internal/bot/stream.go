@@ -30,22 +30,6 @@ var (
 	}
 )
 
-// streamMedia tracks per-session quality picks for URL re-resolution.
-var streamMedia = make(map[string]streamTarget)
-
-type streamTarget struct {
-	ShareKey  string
-	FID       int
-	VideoName string
-	Target    int
-	Label     string
-	Live      bool
-	DaddyID   string
-	Details   media.TitleDetails
-	Episode   *episodeRef
-	TVChannel *tvapi.Channel
-}
-
 func (b *Bot) onAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	if i.ApplicationCommandData().Name == "seek" {
@@ -168,7 +152,7 @@ func (b *Bot) handleStream(s *discordgo.Session, i *discordgo.InteractionCreate)
 			return
 		}
 
-		b.startStream(s, i, details, shareKey, file.FID, file.FileName, nil, title)
+		b.startStream(s, i, details, shareKey, file.FID, file.FileName, nil, title, nil)
 		return
 
 	}
@@ -275,7 +259,19 @@ func (b *Bot) handleSelect(s *discordgo.Session, i *discordgo.InteractionCreate,
 		}
 
 		videoName := b.Resolver.FileName(shareKey, fid)
-		b.startStream(s, i, details, shareKey, fid, videoName, &episodeRef{Season: season, Episode: episode}, fmt.Sprintf("%d:%d", febapi.BoxSeries, id))
+
+		autoNext := &pool.AutoNextContext{
+			ShowID:         id,
+			ShareKey:       shareKey,
+			Season:         season,
+			Episode:        episode,
+			HistoryValue:   fmt.Sprintf("%d:%d", febapi.BoxSeries, id),
+			ChannelID:      i.ChannelID,
+			VoiceChannelID: voiceChannelID(s, i),
+			UserID:         userID(i),
+		}
+
+		b.startStream(s, i, details, shareKey, fid, videoName, &episodeRef{Season: season, Episode: episode}, fmt.Sprintf("%d:%d", febapi.BoxSeries, id), autoNext)
 
 	}
 
@@ -286,7 +282,9 @@ type episodeRef struct {
 	Episode int
 }
 
-func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, details media.TitleDetails, shareKey string, fid int, videoName string, episode *episodeRef, historyValue string) {
+func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, details media.TitleDetails, shareKey string, fid int, videoName string, episode *episodeRef, historyValue string, autoNext *pool.AutoNextContext) {
+
+	b.cancelPendingAutoNext(i.GuildID)
 
 	channel := memberVoiceChannel(s, i)
 
@@ -337,17 +335,9 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 
 	caption := overlayCaption(details.Title, episode)
 
-	streamMedia[session.ID] = streamTarget{
-		ShareKey:  shareKey,
-		FID:       fid,
-		VideoName: videoName,
-		Target:    target,
-		Label:     label,
-		Details:   details,
-		Episode:   episode,
-	}
-
-	targetCopy := streamMedia[session.ID]
+	captionsPreferred, _ := b.DB.CaptionsEnabled(context.Background(), i.GuildID)
+	textChannelID, textChannelName := textChannelInfo(s, i.ChannelID)
+	metadata := metadataFromStream(details, shareKey, fid, videoName, target, label, episode, userID(i), captionsPreferred, autoNext, textChannelID, textChannelName)
 	embed := streamingEmbed(details, channel.ID, episode)
 
 	err = b.Pool.Play(context.Background(), session, pool.Request{
@@ -356,18 +346,21 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 		Caption:      caption,
 		InitialURL:   url,
 		QualityLabel: label,
+		Metadata:     metadata,
+		OnPrepare:      b.prepareStream,
+		OnMediaProbed:  b.armIntroOnProbe,
+		OnNearEnd:      b.handleNearEnd(s, i, session, embed),
 		ResolveURL: func() (string, error) {
-			return b.Resolver.StreamURL(targetCopy.ShareKey, targetCopy.FID, streamMedia[session.ID].Target)
+			return b.Resolver.StreamURL(metadata.ShareKey, metadata.FID, metadata.Target)
 		},
 		QualityURL: func(attempt int) (string, error) {
-			target := streamMedia[session.ID]
-			qualities, err := b.Resolver.Qualities(target.ShareKey, target.FID)
+			qualities, err := b.Resolver.Qualities(metadata.ShareKey, metadata.FID)
 
 			if err != nil {
 				return "", err
 			}
 
-			urls := media.RankedQualityURLs(qualities, target.Target)
+			urls := media.RankedQualityURLs(qualities, metadata.Target)
 
 			if attempt >= len(urls) {
 				return "", fmt.Errorf("no more quality fallbacks")
@@ -376,8 +369,6 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 			return urls[attempt], nil
 		},
 		OnClose: func(reason pool.CloseReason) {
-			delete(streamMedia, session.ID)
-
 			if reason == pool.CloseStopped {
 				return
 			}
@@ -388,7 +379,6 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 
 	if err != nil {
 		log.Printf("failed to start the stream: %v", err)
-		delete(streamMedia, session.ID)
 		b.Pool.Release(session)
 		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("Couldn't join your voice channel to start streaming.")})
 		return
@@ -428,6 +418,8 @@ func (b *Bot) resolveLiveTV(title string) (*tvapi.Channel, error) {
 
 func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCreate, channel tvapi.Channel, historyTitle, historyValue string) {
 
+	b.cancelPendingAutoNext(i.GuildID)
+
 	voice := memberVoiceChannel(s, i)
 
 	if voice == nil {
@@ -455,7 +447,7 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 	daddyID := channel.DaddyID
 
 	tvChannel := channel
-	streamMedia[session.ID] = streamTarget{
+	metadata := &pool.StreamMetadata{
 		Live:      true,
 		DaddyID:   daddyID,
 		Label:     "Live",
@@ -466,7 +458,7 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 	embed := liveStreamingEmbed(details, channel, voice.ID)
 
 	resolveLive := func() (tvapi.ResolvedStream, error) {
-		return b.Resolver.TVStreamEndpoint(streamMedia[session.ID].DaddyID)
+		return b.Resolver.TVStreamEndpoint(metadata.DaddyID)
 	}
 
 	err = b.Pool.Play(context.Background(), session, pool.Request{
@@ -477,6 +469,8 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 		QualityLabel: "Live",
 		Headers:      config.TVStreamHeadersForReferer(endpoint.Referer),
 		Live:         true,
+		Metadata:     metadata,
+		OnPrepare:    b.prepareStream,
 		ResolveURL: func() (string, error) {
 			stream, err := resolveLive()
 			if err != nil {
@@ -492,8 +486,6 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 			return config.TVStreamHeadersForReferer(stream.Referer)
 		},
 		OnClose: func(reason pool.CloseReason) {
-			delete(streamMedia, session.ID)
-
 			if reason == pool.CloseStopped {
 				return
 			}
@@ -504,7 +496,6 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 
 	if err != nil {
 		log.Printf("failed to start the live stream: %v", err)
-		delete(streamMedia, session.ID)
 		b.Pool.Release(session)
 		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("Couldn't join your voice channel to start streaming.")})
 		return
@@ -550,6 +541,7 @@ func (b *Bot) handleControl(s *discordgo.Session, i *discordgo.InteractionCreate
 
 	switch kind {
 	case "stop":
+		b.cancelPendingAutoNext(i.GuildID)
 		embed := controlEmbed(b.Pool, session, "Stream Stopped", "Playback has been stopped.")
 		b.Pool.Stop(session)
 		respondEmbed(s, i, embed)
@@ -577,7 +569,11 @@ func (b *Bot) handleStopButton(s *discordgo.Session, i *discordgo.InteractionCre
 		return
 	}
 
-	session := b.Pool.Get(parts[2])
+	guildID := parts[2]
+
+	b.cancelPendingAutoNext(guildID)
+
+	session := b.Pool.Get(guildID)
 
 	if session != nil {
 		b.Pool.Stop(session)
@@ -662,6 +658,30 @@ func autocompleteLabel(result febapi.SearchResult) string {
 
 }
 
+func textChannelNameForID(s *discordgo.Session, channelID string) string {
+
+	_, name := textChannelInfo(s, channelID)
+
+	return name
+
+}
+
+func textChannelInfo(s *discordgo.Session, channelID string) (string, string) {
+
+	if channelID == "" {
+		return "", ""
+	}
+
+	channel, err := s.Channel(channelID)
+
+	if err != nil || channel == nil {
+		return channelID, ""
+	}
+
+	return channel.ID, channel.Name
+
+}
+
 func overlayCaption(title string, episode *episodeRef) string {
 
 	name := truncate(title, 53)
@@ -715,6 +735,20 @@ func closeLabel(reason pool.CloseReason) string {
 func strPtr(value string) *string {
 
 	return &value
+
+}
+
+func userID(i *discordgo.InteractionCreate) string {
+
+	if i.Member != nil && i.Member.User != nil {
+		return i.Member.User.ID
+	}
+
+	if i.User != nil {
+		return i.User.ID
+	}
+
+	return ""
 
 }
 

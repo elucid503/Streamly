@@ -1,5 +1,7 @@
 #include "transcode_c.h"
 
+extern void streamly_fill_ctas(uintptr_t user, transcode_params_t *params);
+
 #include <errno.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -503,6 +505,102 @@ static void filter_escape(char *dst, size_t dst_size, const char *src) {
 
 }
 
+static void drawtext_escape(char *dst, size_t dst_size, const char *src) {
+
+    size_t j = 0;
+
+    for (size_t i = 0; src[i] != '\0' && j + 2 < dst_size; i++) {
+
+        char c = src[i];
+
+        if (c == '\\' || c == ':' || c == '\'' || c == '%') {
+            dst[j++] = '\\';
+        }
+
+        dst[j++] = c;
+    }
+
+    dst[j] = '\0';
+
+}
+
+static int append_cta_drawtext(char *chain, size_t chain_size, const char *input_pad,
+                             const char *output_pad, const transcode_params_t *params) {
+
+    chain[0] = '\0';
+
+    if (!params->cta_font_path || params->cta_font_path[0] == '\0' || params->cta_count <= 0) {
+        snprintf(chain, chain_size, "[%s]copy[%s]", input_pad, output_pad);
+        return 0;
+    }
+
+    char font[1024];
+    filter_escape(font, sizeof(font), params->cta_font_path);
+
+    char current[32];
+    snprintf(current, sizeof(current), "%s", input_pad);
+
+    int segments = 0;
+
+    for (int i = 0; i < params->cta_count && i < STREAMLY_MAX_CTA; i++) {
+
+        const streamly_cta_t *cta = &params->ctas[i];
+
+        if (!cta->text[0]) {
+            continue;
+        }
+
+        char text[256];
+        drawtext_escape(text, sizeof(text), cta->text);
+
+        double start_s = (double)cta->start_ms / 1000.0;
+        double end_s = (double)cta->end_ms / 1000.0;
+
+        if (end_s <= start_s) {
+            end_s = start_s + 8.0;
+        }
+
+        char next[32];
+        bool is_last = (i == params->cta_count - 1);
+
+        if (is_last) {
+            snprintf(next, sizeof(next), "%s", output_pad);
+        } else {
+            snprintf(next, sizeof(next), "cta%d", i);
+        }
+
+        char segment[2048];
+        int written = snprintf(segment, sizeof(segment),
+                 "[%s]drawtext=fontfile='%s':text='%s':fontsize=16:fontcolor=white@0.9:"
+                 "shadowcolor=black@0.6:shadowx=1:shadowy=1:box=1:boxcolor=black@0.45:boxborderw=6:"
+                 "x=20:y=h-th-22:enable='between(t,%.3f,%.3f)'[%s]",
+                 current, font, text, start_s, end_s, next);
+
+        if (written < 0 || (size_t)written >= sizeof(segment)) {
+            return AVERROR(ENOMEM);
+        }
+
+        if (strlen(chain) + strlen(segment) + 2 >= chain_size) {
+            return AVERROR(ENOMEM);
+        }
+
+        if (chain[0] != '\0') {
+            strncat(chain, ";", chain_size - strlen(chain) - 1);
+        }
+
+        strncat(chain, segment, chain_size - strlen(chain) - 1);
+        snprintf(current, sizeof(current), "%s", next);
+        segments++;
+    }
+
+    if (segments == 0) {
+        snprintf(chain, chain_size, "[%s]copy[%s]", input_pad, output_pad);
+    }
+
+    return 0;
+
+}
+
 static void ensure_decoder_time_base(AVCodecContext *dec, AVStream *stream) {
 
     if (dec->time_base.num > 0 && dec->time_base.den > 0) {
@@ -594,42 +692,73 @@ static int build_filter_graph(const transcode_params_t *params, AVCodecContext *
         return ret;
     }
 
-    char chain[4096];
+    char chain[8192];
+    char scale_pad[16];
+    char post_pad[16];
+    char cta_chain[4096];
+
+    chain[0] = '\0';
+    cta_chain[0] = '\0';
+
+    snprintf(scale_pad, sizeof(scale_pad), "scaled");
+
+    if (params->live) {
+        snprintf(chain, sizeof(chain), "[in]" VIDEO_SCALE_CHAIN_LIVE "[%s]",
+                 params->width, params->height, params->frame_rate, scale_pad);
+    } else {
+        snprintf(chain, sizeof(chain), "[in]" VIDEO_SCALE_CHAIN "[%s]",
+                 params->width, params->height, params->frame_rate, scale_pad);
+    }
+
+    snprintf(post_pad, sizeof(post_pad), "%s", scale_pad);
 
     if (params->subtitle_path && params->subtitle_path[0] != '\0') {
 
         char subs[1024];
         char fonts[1024];
+        char sub_segment[4096];
+        int sub_written;
 
         filter_escape(subs, sizeof(subs), params->subtitle_path);
 
+        snprintf(post_pad, sizeof(post_pad), "subbed");
+
         if (params->fonts_dir && params->fonts_dir[0] != '\0') {
             filter_escape(fonts, sizeof(fonts), params->fonts_dir);
-            snprintf(chain, sizeof(chain),
-                     "[in]" VIDEO_SCALE_CHAIN "[base];"
-                     "[base]subtitles=filename='%s':charenc=UTF-8:fontsdir='%s':"
-                     "force_style='" SUBTITLE_FORCE_STYLE "'[out]",
-                     params->width, params->height, params->frame_rate,
-                     subs, fonts);
+            sub_written = snprintf(sub_segment, sizeof(sub_segment),
+                     "[%s]subtitles=filename='%s':charenc=UTF-8:fontsdir='%s':"
+                     "force_style='" SUBTITLE_FORCE_STYLE "'[%s]",
+                     scale_pad, subs, fonts, post_pad);
         } else {
-            snprintf(chain, sizeof(chain),
-                     "[in]" VIDEO_SCALE_CHAIN "[base];"
-                     "[base]subtitles=filename='%s':charenc=UTF-8:"
-                     "force_style='" SUBTITLE_FORCE_STYLE "'[out]",
-                     params->width, params->height, params->frame_rate,
-                     subs);
+            sub_written = snprintf(sub_segment, sizeof(sub_segment),
+                     "[%s]subtitles=filename='%s':charenc=UTF-8:"
+                     "force_style='" SUBTITLE_FORCE_STYLE "'[%s]",
+                     scale_pad, subs, post_pad);
         }
 
-    } else if (params->live) {
+        if (sub_written < 0 || (size_t)sub_written >= sizeof(sub_segment)) {
+            avfilter_graph_free(&graph);
+            return AVERROR(ENOMEM);
+        }
 
-        snprintf(chain, sizeof(chain), "[in]" VIDEO_SCALE_CHAIN_LIVE "[out]",
-                 params->width, params->height, params->frame_rate);
+        strncat(chain, ";", sizeof(chain) - strlen(chain) - 1);
+        strncat(chain, sub_segment, sizeof(chain) - strlen(chain) - 1);
 
+    }
+
+    if (append_cta_drawtext(cta_chain, sizeof(cta_chain), post_pad, "out", params) != 0) {
+        avfilter_graph_free(&graph);
+        return AVERROR(ENOMEM);
+    }
+
+    if (cta_chain[0] != '\0') {
+        strncat(chain, ";", sizeof(chain) - strlen(chain) - 1);
+        strncat(chain, cta_chain, sizeof(chain) - strlen(chain) - 1);
     } else {
-
-        snprintf(chain, sizeof(chain), "[in]" VIDEO_SCALE_CHAIN "[out]",
-                 params->width, params->height, params->frame_rate);
-
+        char copy_segment[64];
+        snprintf(copy_segment, sizeof(copy_segment), "[%s]copy[out]", post_pad);
+        strncat(chain, ";", sizeof(chain) - strlen(chain) - 1);
+        strncat(chain, copy_segment, sizeof(chain) - strlen(chain) - 1);
     }
 
     AVFilterInOut *inputs = NULL;
@@ -1085,9 +1214,8 @@ static int encode_write_frame(OutputPipeline *out, AVFrame *frame) {
     return 0;
 }
 
-static int process_video_packet(StreamPipeline *video, OutputPipeline *vout,
-                                AVFilterContext *filt_src, AVFilterContext *filt_sink,
-                                volatile bool *abort_flag) {
+static int process_video_packet(StreamPipeline *video, OutputPipeline *vout, AVFilterContext *filt_src,
+                                AVFilterContext *filt_sink, volatile bool *abort_flag) {
 
     int ret = avcodec_send_packet(video->dec, video->pkt);
 
@@ -1360,6 +1488,8 @@ static int transcode_run(struct transcode_handle *handle) {
         params.meta_cb(params.emit_user, duration_ms);
     }
 
+    streamly_fill_ctas(params.emit_user, &handle->params);
+
     // Jump to the requested start by container index, then discard decoded frames
     // up to the exact target so audio and video both begin precisely there.
     int64_t skip_until_us = -1;
@@ -1607,6 +1737,7 @@ transcode_handle_t *transcode_start(const transcode_params_t *params) {
     handle->params = *params;
     handle->params.subtitle_path = dup_opt(params->subtitle_path);
     handle->params.fonts_dir = dup_opt(params->fonts_dir);
+    handle->params.cta_font_path = dup_opt(params->cta_font_path);
     handle->params.input_url = dup_opt(params->input_url);
     handle->params.headers = dup_opt(params->headers);
     handle->exit_code = 0;
@@ -1648,6 +1779,7 @@ void transcode_free(transcode_handle_t *handle) {
 
     free((void *)handle->params.subtitle_path);
     free((void *)handle->params.fonts_dir);
+    free((void *)handle->params.cta_font_path);
     free((void *)handle->params.input_url);
     free((void *)handle->params.headers);
     free(handle);
