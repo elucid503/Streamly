@@ -172,11 +172,27 @@ func (p *Pool) LoadWorkers(ctx context.Context) error {
 		return err
 	}
 
-	for guildID, entry := range p.store.All() {
-		if err := p.addWorker(ctx, guildID, entry.Token); err != nil {
-			log.Printf("worker for guild %s failed to log in: %v", guildID, err)
-		}
+	entries := p.store.All()
+
+	var wg sync.WaitGroup
+
+	for guildID, entry := range entries {
+
+		wg.Add(1)
+
+		go func(guildID, token string) {
+
+			defer wg.Done()
+
+			if err := p.addWorker(ctx, guildID, token); err != nil {
+				log.Printf("worker for guild %s failed to log in: %v", guildID, err)
+			}
+
+		}(guildID, entry.Token)
+
 	}
+
+	wg.Wait()
 
 	return nil
 

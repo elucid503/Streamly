@@ -54,6 +54,11 @@ func NewResolver() *Resolver {
 
 }
 
+// Warmup starts periodic live TV catalog refresh in the background.
+func (r *Resolver) Warmup() {
+	r.tv.Warmup()
+}
+
 func (r *Resolver) Search(query string) ([]febapi.SearchResult, error) {
 
 	results, err := r.showbox.Search(query, febapi.MediaAll, 1, 25)

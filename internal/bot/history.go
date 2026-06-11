@@ -32,7 +32,7 @@ func (b *Bot) recordHistory(i *discordgo.InteractionCreate, title, value string)
 
 }
 
-func (b *Bot) recentSearchChoices(i *discordgo.InteractionCreate, query string) []*discordgo.ApplicationCommandOptionChoice {
+func (b *Bot) recentSearchChoices(ctx context.Context, i *discordgo.InteractionCreate, query string) []*discordgo.ApplicationCommandOptionChoice {
 
 	userID := interactionUserID(i)
 
@@ -40,7 +40,7 @@ func (b *Bot) recentSearchChoices(i *discordgo.InteractionCreate, query string) 
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 	defer cancel()
 
 	entries, err := b.DB.RecentSearches(ctx, userID, 10)

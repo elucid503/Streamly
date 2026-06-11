@@ -65,6 +65,10 @@ func (b *Bot) Start() error {
 		return err
 	}
 
+	log.Printf("[startup] logged in as %s.", b.Session.State.User.Username)
+
+	b.Resolver.Warmup()
+
 	return b.registerCommands()
 
 }
@@ -99,14 +103,8 @@ func (b *Bot) registerCommands() error {
 
 	guildID := config.App.GuildID
 
-	for _, command := range commands {
-
-		_, err := b.Session.ApplicationCommandCreate(b.Session.State.User.ID, guildID, command)
-
-		if err != nil {
-			return err
-		}
-
+	if _, err := b.Session.ApplicationCommandBulkOverwrite(b.Session.State.User.ID, guildID, commands); err != nil {
+		return err
 	}
 
 	scope := "globally"
@@ -115,7 +113,7 @@ func (b *Bot) registerCommands() error {
 		scope = "to guild " + config.App.GuildID
 	}
 
-	log.Printf("[startup] logged in as %s; %d commands registered %s.", b.Session.State.User.Username, len(commands), scope)
+	log.Printf("[startup] %d commands registered %s.", len(commands), scope)
 
 	return nil
 

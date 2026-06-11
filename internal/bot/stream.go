@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 
@@ -30,6 +32,8 @@ var (
 	}
 )
 
+const autocompleteDeadline = 2500 * time.Millisecond
+
 func (b *Bot) onAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	if i.ApplicationCommandData().Name == "seek" {
@@ -45,9 +49,35 @@ func (b *Bot) onAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreat
 		}
 	}
 
-	var choices []*discordgo.ApplicationCommandOptionChoice
+	ctx, cancel := context.WithTimeout(context.Background(), autocompleteDeadline)
+	defer cancel()
 
-	choices = append(choices, b.recentSearchChoices(i, query)...)
+	choices := b.streamTitleChoices(ctx, i, query)
+
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionApplicationCommandAutocompleteResult,
+		Data: &discordgo.InteractionResponseData{Choices: choices},
+	})
+
+}
+
+func (b *Bot) streamTitleChoices(ctx context.Context, i *discordgo.InteractionCreate, query string) []*discordgo.ApplicationCommandOptionChoice {
+
+	type streamAutocompleteFetch struct {
+		recent []*discordgo.ApplicationCommandOptionChoice
+		tv     []tvapi.Channel
+		search []febapi.SearchResult
+	}
+
+	var fetched streamAutocompleteFetch
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		fetched.recent = b.recentSearchChoices(ctx, i, query)
+	}()
 
 	tvLimit := 5
 
@@ -55,20 +85,59 @@ func (b *Bot) onAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreat
 		tvLimit = maxOptions
 	}
 
-	if remaining := maxOptions - len(choices); remaining < tvLimit {
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		channels, err := b.Resolver.SearchTV(query, tvLimit)
+
+		if err != nil {
+			return
+		}
+
+		fetched.tv = channels
+
+	}()
+
+	if query != "" {
+
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+			results, err := b.Resolver.Search(query)
+
+			if err == nil {
+				fetched.search = results
+			}
+
+		}()
+
+	}
+
+	done := make(chan struct{})
+
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+
+	if remaining := maxOptions - len(fetched.recent); remaining < tvLimit {
 		tvLimit = remaining
 	}
 
-	if tvLimit <= 0 {
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionApplicationCommandAutocompleteResult, Data: &discordgo.InteractionResponseData{Choices: choices}})
-		return
-	}
+	var choices []*discordgo.ApplicationCommandOptionChoice
 
-	tvResults, tvErr := b.Resolver.SearchTV(query, tvLimit)
+	choices = append(choices, fetched.recent...)
 
-	if tvErr == nil {
+	if tvLimit > 0 {
 
-		for _, channel := range tvResults {
+		for _, channel := range fetched.tv[:minInt(len(fetched.tv), tvLimit)] {
 			choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
 				Name:  truncate(media.TVAutocompleteLabel(channel), 100),
 				Value: media.TVSelectionValue(channel.DaddyID),
@@ -81,22 +150,16 @@ func (b *Bot) onAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreat
 
 	if query != "" && remaining > 0 {
 
-		results, err := b.Resolver.Search(query)
-
-		if err == nil {
-
-			for _, result := range results[:minInt(len(results), remaining)] {
-				choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
-					Name:  autocompleteLabel(result),
-					Value: fmt.Sprintf("%d:%d", result.BoxType, result.ID),
-				})
-			}
-
+		for _, result := range fetched.search[:minInt(len(fetched.search), remaining)] {
+			choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
+				Name:  autocompleteLabel(result),
+				Value: fmt.Sprintf("%d:%d", result.BoxType, result.ID),
+			})
 		}
 
 	}
 
-	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionApplicationCommandAutocompleteResult, Data: &discordgo.InteractionResponseData{Choices: choices}})
+	return choices
 
 }
 

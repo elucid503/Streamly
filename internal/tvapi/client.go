@@ -31,9 +31,10 @@ type TVClient struct {
 	baseURL string
 	client  *http.Client
 
-	catalogMu sync.RWMutex
-	catalog   *ChannelCatalog
-	catalogAt time.Time
+	catalogMu   sync.RWMutex
+	catalog     *ChannelCatalog
+	catalogAt   time.Time
+	refreshOnce sync.Once
 }
 
 // NewTVClient builds a TVClient with optional overrides.
@@ -49,48 +50,16 @@ func NewTVClient(options TVOptions) *TVClient {
 		baseURL = defaultBaseURL
 	}
 
-	return &TVClient{
+	client := &TVClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
 
-}
+	seedEmbeddedCatalog(client)
 
-// ListChannels downloads and parses the full TV channel catalog.
-func (c *TVClient) ListChannels() (*ChannelCatalog, error) {
-
-	if cached := c.cachedCatalog(); cached != nil {
-		return cached, nil
-	}
-
-	u := c.baseURL + channelsPath
-
-	response, err := c.get(u, c.baseURL+"/")
-
-	if err != nil {
-		return nil, fmt.Errorf("fetch channels: %w", err)
-	}
-
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusOK {
-
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 512))
-		return nil, fmt.Errorf("fetch channels: status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
-
-	}
-
-	var catalog ChannelCatalog
-
-	if err := json.NewDecoder(response.Body).Decode(&catalog); err != nil {
-		return nil, fmt.Errorf("decode channels: %w", err)
-	}
-
-	c.storeCatalog(&catalog)
-
-	return &catalog, nil
+	return client
 
 }
 
@@ -309,18 +278,7 @@ func (c *TVClient) ResolveChannel(channel Channel) (*StreamInfo, error) {
 }
 
 func (c *TVClient) cachedCatalog() *ChannelCatalog {
-
-	c.catalogMu.RLock()
-	defer c.catalogMu.RUnlock()
-
-	if c.catalog == nil || time.Since(c.catalogAt) > catalogTTL {
-		return nil
-	}
-
-	copy := *c.catalog
-
-	return &copy
-
+	return c.anyCatalog()
 }
 
 func (c *TVClient) storeCatalog(catalog *ChannelCatalog) {

@@ -87,8 +87,10 @@ func NewShowboxClient(options ShowboxOptions) *ShowboxClient {
 	}
 
 	return &ShowboxClient{
-		childMode:   childMode,
-		client:      &http.Client{},
+		childMode: childMode,
+		client: &http.Client{
+			Timeout: 10 * time.Second,
+		},
 		searchCache: make(map[string]searchCacheEntry),
 	}
 
