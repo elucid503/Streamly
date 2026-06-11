@@ -1,50 +1,167 @@
 package transcode
 
 import (
+	"context"
 	"sync"
 	"time"
 )
 
-// LiveJitter tracks how far ahead encoded packets are and throttles playback once the
-// target cushion is full. Startup is unaffected: the first packet plays immediately and
-// the demuxer fills the cushion while playback runs at 1x until lag reaches the target.
-type LiveJitter struct {
-	target  time.Duration
-	mu      sync.Mutex
-	headPTS time.Duration
+const liveBufferPollInterval = 25 * time.Millisecond
+
+// LiveBuffer keeps a concrete encoded-ahead cushion for live HLS playback.
+// Playback waits for the target depth before starting, holds on underrun, and
+// slows consumption when the cushion grows past the target.
+type LiveBuffer struct {
+	target time.Duration
+	minLag time.Duration
+
+	mu              sync.Mutex
+	headPTS         time.Duration
+	pendingVideo    time.Duration
+	pendingAudio    time.Duration
+	hasPendingVideo bool
+	hasPendingAudio bool
 }
 
-// NewLiveJitter returns a jitter tracker for live HLS playback.
-func NewLiveJitter(target time.Duration) *LiveJitter {
+// NewLiveBuffer returns a live playback buffer with target and underrun thresholds.
+func NewLiveBuffer(target, minLag time.Duration) *LiveBuffer {
 
-	return &LiveJitter{target: target}
+	if minLag <= 0 || minLag > target {
+		minLag = target / 3
+
+		if minLag < time.Second {
+			minLag = time.Second
+		}
+
+		if minLag > target {
+			minLag = target
+		}
+
+	}
+
+	return &LiveBuffer{
+		target: target,
+		minLag: minLag,
+	}
+
+}
+
+// Target returns the startup and pacing cushion.
+func (b *LiveBuffer) Target() time.Duration {
+
+	return b.target
+
+}
+
+// MinLag returns the minimum encoded-ahead depth before playback advances.
+func (b *LiveBuffer) MinLag() time.Duration {
+
+	return b.minLag
 
 }
 
 // Observe records the PTS of a packet entering the playback queues.
-func (j *LiveJitter) Observe(pts time.Duration) {
+func (b *LiveBuffer) Observe(pts time.Duration) {
 
-	j.mu.Lock()
-	defer j.mu.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
-	if pts > j.headPTS {
-		j.headPTS = pts
+	if pts > b.headPTS {
+		b.headPTS = pts
 	}
 
 }
 
-// Delay returns extra pacing time to keep buffered content at the target depth.
-func (j *LiveJitter) Delay(pts time.Duration) time.Duration {
+// WaitBuffered blocks until every pending stream has enough encoded-ahead cushion.
+func (b *LiveBuffer) WaitBuffered(ctx context.Context, pts time.Duration, required time.Duration, kind Kind) bool {
 
-	j.mu.Lock()
-	defer j.mu.Unlock()
+	if required <= 0 {
+		return true
+	}
 
-	lag := j.headPTS - pts
+	ticker := time.NewTicker(liveBufferPollInterval)
+	defer ticker.Stop()
 
-	if lag <= j.target {
+	for {
+
+		b.mu.Lock()
+
+		if kind == KindVideo {
+			b.pendingVideo = pts
+			b.hasPendingVideo = true
+		} else {
+			b.pendingAudio = pts
+			b.hasPendingAudio = true
+		}
+
+		ready := b.readyLocked(required)
+		b.mu.Unlock()
+
+		if ready {
+			return true
+		}
+
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+
+	}
+
+}
+
+// PacingDelay returns extra pacing time when encoded content is ahead of the target.
+func (b *LiveBuffer) PacingDelay(pts time.Duration) time.Duration {
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	lag := b.lagLocked(pts)
+
+	if lag <= b.target {
 		return 0
 	}
 
-	return lag - j.target
+	return lag - b.target
+
+}
+
+func (b *LiveBuffer) readyLocked(required time.Duration) bool {
+
+	checked := false
+	ready := true
+
+	if b.hasPendingVideo {
+		checked = true
+
+		if b.lagLocked(b.pendingVideo) < required {
+			ready = false
+		}
+
+	}
+
+	if b.hasPendingAudio {
+		checked = true
+
+		if b.lagLocked(b.pendingAudio) < required {
+			ready = false
+		}
+
+	}
+
+	return checked && ready
+
+}
+
+func (b *LiveBuffer) lagLocked(pts time.Duration) time.Duration {
+
+	lag := b.headPTS - pts
+
+	if lag < 0 {
+		return 0
+	}
+
+	return lag
 
 }

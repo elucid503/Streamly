@@ -41,7 +41,8 @@ type StreamOptions struct {
 type DownloadOptions struct {
 	RequestTimeoutMs int // Abort a fetch whose headers or next chunk do not arrive in time.
 	MaxRetries       int // Consecutive failed re-resolves before the source gives up.
-	LiveBufferSec    int // Live HLS cushion kept ahead of playback; 0 disables throttling.
+	LiveBufferSec    int // Live HLS startup cushion and pacing target; 0 disables buffering.
+	LiveMinBufferSec int // Minimum encoded-ahead depth before playback advances during live TV.
 }
 
 var (
@@ -78,7 +79,8 @@ func init() {
 	Download = DownloadOptions{
 		RequestTimeoutMs: envInt("STREAM_READ_TIMEOUT_MS", 30000),
 		MaxRetries:       envInt("STREAM_MAX_RESUME_ATTEMPTS", 5),
-		LiveBufferSec:    envInt("LIVE_HLS_BUFFER_SEC", 10),
+		LiveBufferSec:    envInt("LIVE_HLS_BUFFER_SEC", 5),
+		LiveMinBufferSec: envInt("LIVE_HLS_MIN_BUFFER_SEC", 2),
 	}
 
 }

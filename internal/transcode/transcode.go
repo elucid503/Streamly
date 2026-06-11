@@ -52,7 +52,7 @@ type Session struct {
 	Video  <-chan Packet
 	Audio  <-chan Packet
 	Done   <-chan error
-	Jitter *LiveJitter // Live HLS cushion tracker; nil for VOD.
+	Buffer *LiveBuffer // Live HLS cushion tracker; nil for VOD.
 
 	pause *pauseState
 }

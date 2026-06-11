@@ -205,6 +205,8 @@ func (s *mediaSender) run(ctx context.Context, ts *transcode.Session) error {
 // pump sends one feed in order, pacing each packet against the shared clock and retrying on backpressure.
 func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <-chan transcode.Packet, kind transcode.Kind) error {
 
+	livePrimed := false
+
 	for {
 
 		if !ts.WaitIfPaused(ctx) {
@@ -231,8 +233,25 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 
 			delay := time.Duration(0)
 
-			if ts.Jitter != nil {
-				delay = ts.Jitter.Delay(packet.PTS)
+			if ts.Buffer != nil {
+
+				required := ts.Buffer.MinLag()
+
+				if !livePrimed {
+					required = ts.Buffer.Target()
+				}
+
+				if !ts.Buffer.WaitBuffered(ctx, packet.PTS, required, kind) {
+					return ctx.Err()
+				}
+
+				if !livePrimed && kind == transcode.KindVideo {
+					log.Printf("[stream] live buffer primed (%s cushion); playback starting", required.Round(time.Millisecond))
+				}
+
+				livePrimed = true
+				delay = ts.Buffer.PacingDelay(packet.PTS)
+
 			}
 
 			if !s.clock.wait(ctx, packet.PTS, delay) {
@@ -261,11 +280,14 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 				s.markRTP()
 
 			} else {
-				if late := s.clock.lateness(packet.PTS); late > audioCorrectionThreshold {
-					peer.advanceAudio(duration)
-					s.markRTP()
+				// Drop late audio only when live buffer is not managing pacing.
+				if ts.Buffer == nil {
+					if late := s.clock.lateness(packet.PTS); late > audioCorrectionThreshold {
+						peer.advanceAudio(duration)
+						s.markRTP()
 
-					continue
+						continue
+					}
 				}
 
 				peer.sendAudio(packet.Data, duration)

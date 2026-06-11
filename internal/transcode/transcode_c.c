@@ -31,6 +31,7 @@
 
 // Force 8-bit yuv420p before x264. Avoid colorspace filter: it aborts on unknown primaries.
 #define VIDEO_SCALE_CHAIN "scale=%d:%d:flags=lanczos,format=yuv420p,fps=%d"
+#define VIDEO_SCALE_CHAIN_LIVE "scale=%d:%d:flags=fast_bilinear,format=yuv420p,fps=%d"
 
 // Suppress libav warnings globally before any goroutine can call into libav.
 // The per-session av_log_set_level in transcode_run is a belt-and-suspenders fallback.
@@ -263,8 +264,9 @@ static int open_input_url_once(const char *url, const char *headers, volatile bo
     av_dict_set(&opts, "reconnect", "1", 0);
     av_dict_set(&opts, "reconnect_streamed", "1", 0);
     av_dict_set(&opts, "reconnect_on_network_error", "1", 0);
-    av_dict_set(&opts, "reconnect_delay_max", "5", 0);
-    av_dict_set(&opts, "rw_timeout", "15000000", 0);
+    av_dict_set(&opts, "reconnect_delay_max", "8", 0);
+    av_dict_set(&opts, "rw_timeout", "30000000", 0);
+    av_dict_set(&opts, "timeout", "30000000", 0);
 
     if (headers && headers[0] != '\0') {
         av_dict_set(&opts, "headers", headers, 0);
@@ -574,6 +576,11 @@ static int build_filter_graph(const transcode_params_t *params, AVCodecContext *
                      subs);
         }
 
+    } else if (params->live) {
+
+        snprintf(chain, sizeof(chain), "[in]" VIDEO_SCALE_CHAIN_LIVE "[out]",
+                 params->width, params->height, params->frame_rate);
+
     } else {
 
         snprintf(chain, sizeof(chain), "[in]" VIDEO_SCALE_CHAIN "[out]",
@@ -702,14 +709,23 @@ static int open_video_encoder(const transcode_params_t *params, AVCodecContext *
     enc_ctx->max_b_frames = 0;
     enc_ctx->sample_aspect_ratio = filt->sample_aspect_ratio;
 
-    if (params->threads > 0) {
+    if (params->live) {
+        enc_ctx->thread_count = params->threads > 0 ? params->threads : 2;
+    } else if (params->threads > 0) {
         enc_ctx->thread_count = params->threads;
     }
 
     // No muxer: keep SPS/PPS in-band Annex-B so the WebRTC H264 packetizer can ship frames directly.
     AVDictionary *opts = NULL;
-    av_dict_set(&opts, "preset", "superfast", 0);
-    av_dict_set(&opts, "tune", "film", 0);
+
+    if (params->live) {
+        av_dict_set(&opts, "preset", "ultrafast", 0);
+        av_dict_set(&opts, "tune", "zerolatency", 0);
+    } else {
+        av_dict_set(&opts, "preset", "superfast", 0);
+        av_dict_set(&opts, "tune", "film", 0);
+    }
+
     av_dict_set(&opts, "profile", "baseline", 0);
     av_dict_set(&opts, "level", "3.1", 0);
     av_dict_set(&opts, "forced-idr", "1", 0);

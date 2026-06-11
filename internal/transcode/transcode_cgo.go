@@ -36,14 +36,14 @@ import (
 const videoPacketChannelCap = 120 // About 4 seconds at 30 fps; balances jitter cushion vs Go heap.
 const audioPacketChannelCap = 200 // About 4 seconds of 20 ms Opus.
 
-const videoPacketChannelCapLive = 180 // About 6 seconds at 30 fps for live HLS cushion.
-const audioPacketChannelCapLive = 300 // About 6 seconds of 20 ms Opus for live HLS cushion.
+const videoPacketChannelCapLive = 150 // About 5 seconds at 30 fps for live HLS cushion.
+const audioPacketChannelCapLive = 250 // About 5 seconds of 20 ms Opus for live HLS cushion.
 
 // emitTarget is the live destination and input for one transcode's callbacks.
 type emitTarget struct {
 	ctx        context.Context
 	pause      *pauseState
-	jitter     *LiveJitter
+	buffer     *LiveBuffer
 	video      chan<- Packet
 	audio      chan<- Packet
 	input      InputReader
@@ -119,8 +119,8 @@ func streamlyTranscodeEmit(user C.uintptr_t, kind C.int, data *C.uint8_t, length
 
 	}
 
-	if target.jitter != nil {
-		target.jitter.Observe(packet.PTS)
+	if target.buffer != nil {
+		target.buffer.Observe(packet.PTS)
 	}
 
 	if !target.pause.Wait(target.ctx) {
@@ -223,16 +223,21 @@ func startNative(request Request) (*Session, error) {
 
 	pause := newPauseState()
 
-	var jitter *LiveJitter
+	var buffer *LiveBuffer
 
 	if request.Live && config.Download.LiveBufferSec > 0 {
-		jitter = NewLiveJitter(time.Duration(config.Download.LiveBufferSec) * time.Second)
+
+		target := time.Duration(config.Download.LiveBufferSec) * time.Second
+		minLag := time.Duration(config.Download.LiveMinBufferSec) * time.Second
+
+		buffer = NewLiveBuffer(target, minLag)
+
 	}
 
 	target := &emitTarget{
 		ctx:        request.Context,
 		pause:      pause,
-		jitter:     jitter,
+		buffer:     buffer,
 		video:      video,
 		audio:      audio,
 		input:      request.Source,
@@ -299,6 +304,7 @@ func startNative(request Request) (*Session, error) {
 		input_url:           inputURLCString,
 		headers:             headersCString,
 		start_ms:            C.int64_t(request.Start.Milliseconds()),
+		live:                C.bool(request.Live),
 		emit:                C.streamly_emit_cb(C.streamlyTranscodeEmit),
 		meta_cb:             C.streamly_meta_cb(C.streamlyTranscodeMeta),
 		emit_user:           C.uintptr_t(id),
@@ -360,7 +366,7 @@ func startNative(request Request) (*Session, error) {
 		Video:  video,
 		Audio:  audio,
 		Done:   done,
-		Jitter: jitter,
+		Buffer: buffer,
 		pause:  pause,
 	}, nil
 
