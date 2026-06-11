@@ -131,6 +131,13 @@ func endedCard(embeds []*discordgo.MessageEmbed, label string) ([]*discordgo.Mes
 
 }
 
+func closeStreamMessage(s *discordgo.Session, i *discordgo.InteractionCreate, embed *discordgo.MessageEmbed, label string) {
+
+	embeds, components := endedCard([]*discordgo.MessageEmbed{embed}, label)
+	_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Embeds: &embeds, Components: &components})
+
+}
+
 func memberVoiceChannel(s *discordgo.Session, i *discordgo.InteractionCreate) *discordgo.Channel {
 
 	channelID := voiceChannelID(s, i)

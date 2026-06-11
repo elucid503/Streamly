@@ -648,10 +648,26 @@ func playbackURLForAttempt(request Request, attempt int) (string, error) {
 
 }
 
-const hlsStartupRetryWindow = 15 * time.Second
+const (
+	hlsStartupRetryWindow = 15 * time.Second
+
+	liveReconnectStableWindow = 30 * time.Second
+	liveReconnectBackoffBase  = 1 * time.Second
+	liveReconnectBackoffMax   = 30 * time.Second
+)
 
 // playHLS never seeks: Seek refuses HLS sources outright (broken libav fMP4 seek).
 func (p *Pool) playHLS(ctx context.Context, session *Session, playback *streamer.Playback, request Request, headers map[string]string) error {
+
+	if request.Live {
+		return p.playLiveHLS(ctx, session, playback, request, headers)
+	}
+
+	return p.playVodHLS(ctx, session, playback, request, headers)
+
+}
+
+func (p *Pool) playVodHLS(ctx context.Context, session *Session, playback *streamer.Playback, request Request, headers map[string]string) error {
 
 	url := request.InitialURL
 	var lastErr error
@@ -684,7 +700,6 @@ func (p *Pool) playHLS(ctx context.Context, session *Session, playback *streamer
 			InputURL: url,
 			Headers:  headers,
 			Caption:  request.Caption,
-			Live:     request.Live,
 		}, 0, nil)
 
 		if ctx.Err() != nil {
@@ -708,6 +723,99 @@ func (p *Pool) playHLS(ctx context.Context, session *Session, playback *streamer
 	}
 
 	return lastErr
+
+}
+
+// playLiveHLS keeps the Discord stream open and reconnects to the upstream source on drop.
+func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *streamer.Playback, request Request, headers map[string]string) error {
+
+	url := request.InitialURL
+	backoff := liveReconnectBackoffBase
+	attempt := 0
+
+	for {
+
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		if attempt > 0 {
+
+			log.Printf(`[stream] live reconnect %d for "%s" in %s`, attempt, request.Caption, backoff)
+
+			if request.ResolveURL != nil {
+
+				if fresh, err := request.ResolveURL(); err == nil && fresh != "" {
+					url = fresh
+				} else if err != nil {
+					log.Printf(`[stream] live URL re-resolve failed for "%s": %v`, request.Caption, err)
+				}
+
+			}
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+
+		}
+
+		started := time.Now()
+
+		playErr, transErr := p.runSegment(ctx, session, playback, transcode.Request{
+			InputURL: url,
+			Headers:  headers,
+			Caption:  request.Caption,
+			Live:     true,
+		}, 0, nil)
+
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		uptime := time.Since(started)
+
+		if playErr == nil && transErr == nil {
+
+			log.Printf(`[stream] live source ended for "%s" after %s, reconnecting`, request.Caption, uptime.Round(time.Second))
+			attempt++
+			backoff = nextLiveReconnectBackoff(backoff, uptime)
+			transcode.TrimNativeHeap()
+
+			continue
+
+		}
+
+		err := playErr
+
+		if err == nil {
+			err = transErr
+		}
+
+		log.Printf(`[stream] live stream "%s" dropped after %s: %v`, request.Caption, uptime.Round(time.Second), err)
+
+		attempt++
+		backoff = nextLiveReconnectBackoff(backoff, uptime)
+		transcode.TrimNativeHeap()
+
+	}
+
+}
+
+func nextLiveReconnectBackoff(current, uptime time.Duration) time.Duration {
+
+	if uptime >= liveReconnectStableWindow {
+		return liveReconnectBackoffBase
+	}
+
+	next := current * 2
+
+	if next > liveReconnectBackoffMax {
+		return liveReconnectBackoffMax
+	}
+
+	return next
 
 }
 

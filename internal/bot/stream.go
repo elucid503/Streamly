@@ -348,6 +348,7 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 	}
 
 	targetCopy := streamMedia[session.ID]
+	embed := streamingEmbed(details, channel.ID, episode)
 
 	err = b.Pool.Play(context.Background(), session, pool.Request{
 		GuildID:      channel.GuildID,
@@ -381,8 +382,7 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 				return
 			}
 
-			embeds, components := endedCard(i.Message.Embeds, closeLabel(reason))
-			_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Embeds: &embeds, Components: &components})
+			closeStreamMessage(s, i, embed, closeLabel(reason))
 		},
 	})
 
@@ -394,7 +394,6 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 		return
 	}
 
-	embed := streamingEmbed(details, channel.ID, episode)
 	components := controlRow(session.ID, false, false)
 	editMessage(s, i, &discordgo.WebhookEdit{Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}), Components: ptrComponents(components)})
 	b.recordHistory(i, details.Title, historyValue)
@@ -464,6 +463,8 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 		TVChannel: &tvChannel,
 	}
 
+	embed := liveStreamingEmbed(details, channel, voice.ID)
+
 	err = b.Pool.Play(context.Background(), session, pool.Request{
 		GuildID:      voice.GuildID,
 		ChannelID:    voice.ID,
@@ -482,8 +483,7 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 				return
 			}
 
-			embeds, components := endedCard(i.Message.Embeds, closeLabel(reason))
-			_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Embeds: &embeds, Components: &components})
+			closeStreamMessage(s, i, embed, closeLabel(reason))
 		},
 	})
 
@@ -495,7 +495,6 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 		return
 	}
 
-	embed := liveStreamingEmbed(details, channel, voice.ID)
 	components := controlRow(session.ID, false, true)
 	editMessage(s, i, &discordgo.WebhookEdit{Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}), Components: ptrComponents(components)})
 	b.recordHistory(i, historyTitle, historyValue)
