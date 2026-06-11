@@ -38,7 +38,7 @@ type Request struct {
 	InputURL     string      // Direct media URL; HLS uses libavformat's in-process demuxer.
 	Headers      map[string]string
 	Start        time.Duration // Initial playback position; 0 plays from the beginning.
-	Live         bool          // Live HLS: widen packet queues and let playback hold a jitter cushion.
+	Live         bool          // Live HLS: low-latency libav tuning and wider packet queues.
 	Caption      string        // Log tag and stats label.
 	SubtitlePath string        // External subtitle file for burn-in; empty disables captions.
 	FontsDir     string        // Directory containing font.ttf for libass.
@@ -52,8 +52,6 @@ type Session struct {
 	Video  <-chan Packet
 	Audio  <-chan Packet
 	Done   <-chan error
-	Buffer *LiveBuffer // Live HLS cushion tracker; nil for VOD.
-
 	pause *pauseState
 }
 

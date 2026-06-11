@@ -43,7 +43,6 @@ const audioPacketChannelCapLive = 250 // About 5 seconds of 20 ms Opus for live 
 type emitTarget struct {
 	ctx        context.Context
 	pause      *pauseState
-	buffer     *LiveBuffer
 	video      chan<- Packet
 	audio      chan<- Packet
 	input      InputReader
@@ -117,10 +116,6 @@ func streamlyTranscodeEmit(user C.uintptr_t, kind C.int, data *C.uint8_t, length
 			packet.Duration = opusPacketDuration(payload)
 		}
 
-	}
-
-	if target.buffer != nil {
-		target.buffer.Observe(packet.PTS)
 	}
 
 	if !target.pause.Wait(target.ctx) {
@@ -223,21 +218,9 @@ func startNative(request Request) (*Session, error) {
 
 	pause := newPauseState()
 
-	var buffer *LiveBuffer
-
-	if request.Live && config.Download.LiveBufferSec > 0 {
-
-		target := time.Duration(config.Download.LiveBufferSec) * time.Second
-		minLag := time.Duration(config.Download.LiveMinBufferSec) * time.Second
-
-		buffer = NewLiveBuffer(target, minLag)
-
-	}
-
 	target := &emitTarget{
 		ctx:        request.Context,
 		pause:      pause,
-		buffer:     buffer,
 		video:      video,
 		audio:      audio,
 		input:      request.Source,
@@ -366,7 +349,6 @@ func startNative(request Request) (*Session, error) {
 		Video:  video,
 		Audio:  audio,
 		Done:   done,
-		Buffer: buffer,
 		pause:  pause,
 	}, nil
 

@@ -651,10 +651,7 @@ func playbackURLForAttempt(request Request, attempt int) (string, error) {
 
 const (
 	hlsStartupRetryWindow = 15 * time.Second
-
-	liveReconnectStableWindow = 30 * time.Second
-	liveReconnectBackoffBase  = 1 * time.Second
-	liveReconnectBackoffMax   = 30 * time.Second
+	liveReconnectDelay    = 2 * time.Second
 )
 
 // playHLS never seeks: Seek refuses HLS sources outright (broken libav fMP4 seek).
@@ -731,7 +728,6 @@ func (p *Pool) playVodHLS(ctx context.Context, session *Session, playback *strea
 func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *streamer.Playback, request Request, headers map[string]string) error {
 
 	url := request.InitialURL
-	backoff := liveReconnectBackoffBase
 	attempt := 0
 
 	for {
@@ -742,7 +738,7 @@ func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *stre
 
 		if attempt > 0 {
 
-			log.Printf(`[stream] live reconnect %d for "%s" in %s`, attempt, request.Caption, backoff)
+			log.Printf(`[stream] live reconnect %d for "%s"`, attempt, request.Caption)
 
 			if request.ResolveURL != nil {
 
@@ -765,12 +761,10 @@ func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *stre
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(backoff):
+			case <-time.After(liveReconnectDelay):
 			}
 
 		}
-
-		started := time.Now()
 
 		playErr, transErr := p.runSegment(ctx, session, playback, transcode.Request{
 			InputURL: url,
@@ -783,48 +777,23 @@ func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *stre
 			return ctx.Err()
 		}
 
-		uptime := time.Since(started)
-
 		if playErr == nil && transErr == nil {
+			log.Printf(`[stream] live source ended for "%s", reconnecting`, request.Caption)
+		} else {
 
-			log.Printf(`[stream] live source ended for "%s" after %s, reconnecting`, request.Caption, uptime.Round(time.Second))
-			attempt++
-			backoff = nextLiveReconnectBackoff(backoff, uptime)
-			transcode.TrimNativeHeap()
+			err := playErr
 
-			continue
+			if err == nil {
+				err = transErr
+			}
+
+			log.Printf(`[stream] live stream "%s" dropped: %v`, request.Caption, err)
 
 		}
-
-		err := playErr
-
-		if err == nil {
-			err = transErr
-		}
-
-		log.Printf(`[stream] live stream "%s" dropped after %s: %v`, request.Caption, uptime.Round(time.Second), err)
 
 		attempt++
-		backoff = nextLiveReconnectBackoff(backoff, uptime)
-		transcode.TrimNativeHeap()
 
 	}
-
-}
-
-func nextLiveReconnectBackoff(current, uptime time.Duration) time.Duration {
-
-	if uptime >= liveReconnectStableWindow {
-		return liveReconnectBackoffBase
-	}
-
-	next := current * 2
-
-	if next > liveReconnectBackoffMax {
-		return liveReconnectBackoffMax
-	}
-
-	return next
 
 }
 
