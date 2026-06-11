@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"streamly/internal/textutil"
 )
 
-const baseURL = "https://api.tvmaze.com"
+var baseURL = "https://api.tvmaze.com"
 
 // Client fetches episode metadata from the TVmaze public API (no key required).
 type Client struct {
@@ -62,7 +64,7 @@ func (c *Client) EpisodeTitles(imdbID string, season int) (map[int]string, error
 
 	for _, ep := range eps {
 		if ep.Season == season && ep.Number > 0 && ep.Name != "" {
-			titles[ep.Number] = ep.Name
+			titles[ep.Number] = textutil.DecodeHTML(ep.Name)
 		}
 	}
 

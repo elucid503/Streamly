@@ -1,11 +1,8 @@
 package febapi
 
-import (
-	"html"
-	"strings"
-)
+import "streamly/internal/textutil"
 
 // DecodeText normalizes user-facing strings from Showbox API payloads.
 func DecodeText(value string) string {
-	return strings.TrimSpace(html.UnescapeString(value))
+	return textutil.DecodeHTML(value)
 }
