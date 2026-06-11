@@ -6,6 +6,20 @@ import "bytes"
 var startCode3 = []byte{0, 0, 1}
 
 const h264NalTypeSPS = 7 // SPS NAL unit type.
+const h264NalTypeIDR = 5 // IDR slice NAL unit type.
+
+// h264ContainsIDR reports whether an Annex-B frame carries an IDR slice.
+func h264ContainsIDR(frame []byte) bool {
+
+	for _, nalu := range splitNALUs(frame) {
+		if len(nalu) > 0 && nalu[0]&0x1f == h264NalTypeIDR {
+			return true
+		}
+	}
+
+	return false
+
+}
 
 // rewriteH264SPS rewrites SPS VUI so Discord's decoder accepts the Annex-B frame.
 func rewriteH264SPS(frame []byte) []byte {

@@ -156,6 +156,6 @@ func episodeRefFromPool(episode *pool.EpisodeRef) *episodeRef {
 		return nil
 	}
 
-	return &episodeRef{Season: episode.Season, Episode: episode.Episode}
+	return &episodeRef{Season: episode.Season, Episode: episode.Episode, Title: episode.Title}
 
 }

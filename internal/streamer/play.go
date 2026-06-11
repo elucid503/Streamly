@@ -13,6 +13,10 @@ import (
 
 const audioCorrectionThreshold = 350 * time.Millisecond
 
+// pauseFrameInterval paces the re-sent pause-card IDR: frequent enough that clients
+// never enter the buffering state, sparse enough to stay well under the video bitrate.
+const pauseFrameInterval = 500 * time.Millisecond
+
 // Playback owns one Go Live stream and splices successive transcode sessions into it.
 type Playback struct {
 	streamer   *Streamer
@@ -73,6 +77,10 @@ type mediaSender struct {
 	clock      mediaClock
 	pauseMu    sync.Mutex
 	pauseEpoch uint64
+	pauseSent  time.Duration // Video RTP advanced by pause-card sends, not yet matched on audio.
+	dropToIDR  bool          // Drop video until the next in-stream IDR so refs survive the pause card.
+
+	lastVideoPTSMs int64 // PTS of the last real video packet sent; freezes the pause card there.
 
 	rtpMu        sync.Mutex
 	lastRTPAt    time.Time // When the RTP timeline last advanced (send, drop, or pause shift).
@@ -85,7 +93,10 @@ func (s *mediaSender) beginSegment() {
 
 	s.pauseMu.Lock()
 	s.pauseEpoch = 0
+	s.dropToIDR = false // New sessions open with an IDR; pauseSent debt carries until the next resume.
 	s.pauseMu.Unlock()
+
+	s.lastVideoPTSMs = -1
 
 	s.clock.reset()
 
@@ -224,12 +235,83 @@ func (s *mediaSender) run(ctx context.Context, ts *transcode.Session) error {
 
 }
 
+// holdWhilePaused keeps the video feed alive during a pause by re-sending the cached
+// pause-card IDR, instead of going silent and letting clients fall into a loading state.
+// The audio feed keeps the original blocking wait. Returns false when ctx ends.
+func (s *mediaSender) holdWhilePaused(ctx context.Context, ts *transcode.Session, kind transcode.Kind) bool {
+
+	if kind != transcode.KindVideo {
+		return ts.WaitIfPaused(ctx)
+	}
+
+	for ts.IsPaused() {
+
+		s.sendPauseFrame(ctx, ts)
+
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(pauseFrameInterval):
+		}
+
+	}
+
+	return ctx.Err() == nil
+
+}
+
+// sendPauseFrame ships one pause-card IDR and records the video RTP debt it creates.
+func (s *mediaSender) sendPauseFrame(ctx context.Context, ts *transcode.Session) {
+
+	frame, ok := ts.PauseFrame(s.lastVideoPTSMs)
+
+	if !ok {
+		return
+	}
+
+	peer, err := s.resolvePeer(ctx)
+
+	if err != nil {
+		return
+	}
+
+	s.applySegmentGap(peer)
+
+	peer.sendVideo(frame, pauseFrameInterval)
+	s.markRTP()
+
+	s.pauseMu.Lock()
+	s.pauseSent += pauseFrameInterval
+	s.pauseMu.Unlock()
+
+}
+
+// consumeVideoDrop reports whether a video frame must be dropped because the decoder's
+// references were displaced by the pause card; the next in-stream IDR re-anchors cleanly.
+func (s *mediaSender) consumeVideoDrop(frame []byte) bool {
+
+	s.pauseMu.Lock()
+	defer s.pauseMu.Unlock()
+
+	if !s.dropToIDR {
+		return false
+	}
+
+	if h264ContainsIDR(frame) {
+		s.dropToIDR = false
+		return false
+	}
+
+	return true
+
+}
+
 // pump sends one feed in order, pacing each packet against the shared clock and retrying on backpressure.
 func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <-chan transcode.Packet, kind transcode.Kind) error {
 
 	for {
 
-		if !ts.WaitIfPaused(ctx) {
+		if !s.holdWhilePaused(ctx, ts, kind) {
 			return ctx.Err()
 		}
 
@@ -245,7 +327,7 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 				return nil
 			}
 
-			if !ts.WaitIfPaused(ctx) {
+			if !s.holdWhilePaused(ctx, ts, kind) {
 				return ctx.Err()
 			}
 
@@ -273,7 +355,15 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 
 			if kind == transcode.KindVideo {
 
+				if s.consumeVideoDrop(packet.Data) {
+					peer.advanceVideo(duration)
+					s.markRTP()
+
+					continue
+				}
+
 				peer.sendVideo(packet.Data, duration)
+				s.lastVideoPTSMs = packet.PTS.Milliseconds()
 				s.markRTP()
 
 			} else {
@@ -329,10 +419,31 @@ func (s *mediaSender) applyPauseEvent(ts *transcode.Session) {
 		return
 	}
 
+	// Pause-card sends already advanced video RTP by pauseSent; advance video by the
+	// remainder only, and fold any overshoot into audio so both tracks shift equally.
+	sent := s.pauseSent
+	s.pauseSent = 0
+
+	videoGap := duration - sent
+	audioGap := duration
+
+	if videoGap < 0 {
+		audioGap -= videoGap
+		videoGap = 0
+	}
+
+	if sent > 0 {
+		s.dropToIDR = true
+	}
+
 	if peer := s.activePeer; peer != nil {
 		s.clock.shift(duration)
-		peer.advanceAudio(duration)
-		peer.advanceVideo(duration)
+		peer.advanceAudio(audioGap)
+
+		if videoGap > 0 {
+			peer.advanceVideo(videoGap)
+		}
+
 		s.markRTP()
 	}
 

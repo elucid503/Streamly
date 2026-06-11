@@ -138,9 +138,25 @@ func (b *Bot) promptAutoNext(s *discordgo.Session, i *discordgo.InteractionCreat
 
 	nextEpisode := &episodeRef{Season: next.Season, Episode: next.Episode}
 
+	if metadata != nil {
+		key := fmt.Sprintf("%d:%d", next.Season, next.Episode)
+		nextEpisode.Title = metadata.Details.EpisodeTitles[key]
+		if nextEpisode.Title == "" {
+			if epTitles := b.Resolver.EpisodeList(metadata.Details.IMDBId, next.Season); epTitles != nil {
+				nextEpisode.Title = epTitles[next.Episode]
+			}
+		}
+	}
+
 	embed := streamingEmbed(details, channelID, nextEpisode)
 	embed.Author = &discordgo.MessageEmbedAuthor{Name: "Up Next"}
-	embed.Description = fmt.Sprintf("Season %d · Episode %d starts in 15 seconds.", next.Season, next.Episode)
+
+	ep := fmt.Sprintf("S%dE%d", next.Season, next.Episode)
+	if nextEpisode.Title != "" {
+		ep += " — " + nextEpisode.Title
+	}
+
+	embed.Description = ep + " starts in 15 seconds."
 
 	components := autoNextRow(guildID)
 
@@ -250,7 +266,15 @@ func (b *Bot) executeAutoNextPlay(s *discordgo.Session, state *autoNextState) {
 		return
 	}
 
-	episode := &episodeRef{Season: state.next.Season, Episode: state.next.Episode}
+	epTitle := state.details.EpisodeTitles[fmt.Sprintf("%d:%d", state.next.Season, state.next.Episode)]
+
+	if epTitle == "" {
+		if epTitles := b.Resolver.EpisodeList(state.details.IMDBId, state.next.Season); epTitles != nil {
+			epTitle = epTitles[state.next.Episode]
+		}
+	}
+
+	episode := &episodeRef{Season: state.next.Season, Episode: state.next.Episode, Title: epTitle}
 
 	auto := state.auto
 	auto.Season = state.next.Season
@@ -262,7 +286,7 @@ func (b *Bot) executeAutoNextPlay(s *discordgo.Session, state *autoNextState) {
 		VideoName:       state.next.FileName,
 		Target:          config.Stream.Height,
 		Details:         state.details,
-		Episode:         &pool.EpisodeRef{Season: episode.Season, Episode: episode.Episode},
+		Episode:         &pool.EpisodeRef{Season: episode.Season, Episode: episode.Episode, Title: episode.Title},
 		AutoNext:        &auto,
 		UserID:          auto.UserID,
 		TextChannelID:   auto.ChannelID,

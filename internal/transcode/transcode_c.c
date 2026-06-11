@@ -142,13 +142,104 @@ typedef struct OutputPipeline {
     uintptr_t emit_user; // Opaque Go handle token.
 } OutputPipeline;
 
+// FREEZE_RING_SLOTS frames at FREEZE_INTERVAL_MS cover the encoder's read-ahead
+// over the Go packet channel (~4s), so the pause card can freeze on the frame the
+// viewer actually saw. Slots hold refs into the filter graph's buffer pool: no copies.
+#define FREEZE_RING_SLOTS 8
+#define FREEZE_INTERVAL_MS 500
+
 struct transcode_handle {
     pthread_t thread;
     transcode_params_t params;
     InterruptState interrupt;
     int exit_code;
     char error[ERR_BUF];
+
+    pthread_mutex_t freeze_lock;
+    AVFrame *freeze_ring[FREEZE_RING_SLOTS];
+    int64_t freeze_pts_ms[FREEZE_RING_SLOTS];
+    int freeze_next;
 };
+
+// freeze_capture refs one post-filter frame into the ring; called from the worker thread only.
+static void freeze_capture(transcode_handle_t *handle, const AVFrame *frame, int64_t pts_ms) {
+
+    pthread_mutex_lock(&handle->freeze_lock);
+
+    int slot = handle->freeze_next % FREEZE_RING_SLOTS;
+
+    if (!handle->freeze_ring[slot]) {
+        handle->freeze_ring[slot] = av_frame_alloc();
+    }
+
+    AVFrame *dst = handle->freeze_ring[slot];
+
+    if (dst) {
+
+        av_frame_unref(dst);
+
+        if (av_frame_ref(dst, frame) >= 0) {
+            handle->freeze_pts_ms[slot] = pts_ms;
+            handle->freeze_next++;
+        }
+    }
+
+    pthread_mutex_unlock(&handle->freeze_lock);
+
+}
+
+// freeze_pick returns a new ref to the ring frame nearest target_pts_ms (newest when
+// target is negative), or NULL when nothing has been captured yet.
+static AVFrame *freeze_pick(transcode_handle_t *handle, int64_t target_pts_ms) {
+
+    AVFrame *out = av_frame_alloc();
+
+    if (!out) {
+        return NULL;
+    }
+
+    pthread_mutex_lock(&handle->freeze_lock);
+
+    int count = handle->freeze_next < FREEZE_RING_SLOTS ? handle->freeze_next : FREEZE_RING_SLOTS;
+    int best = -1;
+    int64_t best_score = INT64_MAX;
+
+    for (int i = 0; i < count; i++) {
+
+        if (!handle->freeze_ring[i] || !handle->freeze_ring[i]->data[0]) {
+            continue;
+        }
+
+        int64_t score;
+
+        if (target_pts_ms < 0) {
+            score = INT64_MAX - handle->freeze_pts_ms[i];
+        } else {
+            score = handle->freeze_pts_ms[i] - target_pts_ms;
+
+            if (score < 0) {
+                score = -score;
+            }
+        }
+
+        if (score < best_score) {
+            best_score = score;
+            best = i;
+        }
+    }
+
+    int ret = best >= 0 ? av_frame_ref(out, handle->freeze_ring[best]) : AVERROR(ENOENT);
+
+    pthread_mutex_unlock(&handle->freeze_lock);
+
+    if (ret < 0) {
+        av_frame_free(&out);
+        return NULL;
+    }
+
+    return out;
+
+}
 
 static void set_error(struct transcode_handle *handle, const char *msg) {
 
@@ -540,9 +631,22 @@ static int append_cta_drawtext(char *chain, size_t chain_size, const char *input
     char current[32];
     snprintf(current, sizeof(current), "%s", input_pad);
 
-    int segments = 0;
+    // The final emitted segment must write output_pad, so find the last drawable
+    // CTA up front; trailing empty entries would otherwise leave the chain dangling.
+    int last_valid = -1;
 
     for (int i = 0; i < params->cta_count && i < STREAMLY_MAX_CTA; i++) {
+        if (params->ctas[i].text[0]) {
+            last_valid = i;
+        }
+    }
+
+    if (last_valid < 0) {
+        snprintf(chain, chain_size, "[%s]copy[%s]", input_pad, output_pad);
+        return 0;
+    }
+
+    for (int i = 0; i <= last_valid; i++) {
 
         const streamly_cta_t *cta = &params->ctas[i];
 
@@ -561,7 +665,7 @@ static int append_cta_drawtext(char *chain, size_t chain_size, const char *input
         }
 
         char next[32];
-        bool is_last = (i == params->cta_count - 1);
+        bool is_last = (i == last_valid);
 
         if (is_last) {
             snprintf(next, sizeof(next), "%s", output_pad);
@@ -590,11 +694,6 @@ static int append_cta_drawtext(char *chain, size_t chain_size, const char *input
 
         strncat(chain, segment, chain_size - strlen(chain) - 1);
         snprintf(current, sizeof(current), "%s", next);
-        segments++;
-    }
-
-    if (segments == 0) {
-        snprintf(chain, chain_size, "[%s]copy[%s]", input_pad, output_pad);
     }
 
     return 0;
@@ -1214,8 +1313,20 @@ static int encode_write_frame(OutputPipeline *out, AVFrame *frame) {
     return 0;
 }
 
-static int process_video_packet(StreamPipeline *video, OutputPipeline *vout, AVFilterContext *filt_src,
-                                AVFilterContext *filt_sink, volatile bool *abort_flag) {
+static int process_video_packet(transcode_handle_t *handle, StreamPipeline *video, OutputPipeline *vout,
+                                AVFilterContext *filt_src, AVFilterContext *filt_sink,
+                                volatile bool *abort_flag) {
+
+    int freeze_stride = 1;
+
+    if (vout->frame_rate > 0) {
+
+        freeze_stride = vout->frame_rate * FREEZE_INTERVAL_MS / 1000;
+
+        if (freeze_stride < 1) {
+            freeze_stride = 1;
+        }
+    }
 
     int ret = avcodec_send_packet(video->dec, video->pkt);
 
@@ -1264,6 +1375,10 @@ static int process_video_packet(StreamPipeline *video, OutputPipeline *vout, AVF
 
             if (ret < 0) {
                 return ret;
+            }
+
+            if (handle && vout->next_pts % freeze_stride == 0 && vout->frame_rate > 0) {
+                freeze_capture(handle, vout->frame, vout->next_pts * 1000 / vout->frame_rate);
             }
 
             vout->frame->pts = vout->next_pts++;
@@ -1618,7 +1733,7 @@ static int transcode_run(struct transcode_handle *handle) {
                 av_packet_free(&video.pkt);
                 video.pkt = vpkt;
 
-                ret = process_video_packet(&video, &vout, filt_src, filt_sink, params.abort_flag);
+                ret = process_video_packet(handle, &video, &vout, filt_src, filt_sink, params.abort_flag);
 
                 if (ret < 0) {
                     break;
@@ -1717,6 +1832,420 @@ static void *transcode_thread(void *arg) {
     return NULL;
 }
 
+static AVFrame *alloc_black_frame(int width, int height) {
+
+    AVFrame *frame = av_frame_alloc();
+
+    if (!frame) {
+        return NULL;
+    }
+
+    frame->format = AV_PIX_FMT_YUV420P;
+    frame->width = width;
+    frame->height = height;
+
+    if (av_frame_get_buffer(frame, 0) < 0) {
+        av_frame_free(&frame);
+        return NULL;
+    }
+
+    memset(frame->data[0], 16, (size_t)frame->linesize[0] * height);
+    memset(frame->data[1], 128, (size_t)frame->linesize[1] * (height / 2));
+    memset(frame->data[2], 128, (size_t)frame->linesize[2] * (height / 2));
+
+    return frame;
+
+}
+
+// append_pause_drawtext adds one horizontally centered drawtext to the pause card chain.
+static int append_pause_drawtext(char *chain, size_t chain_size, char *current, size_t current_size,
+                                 int *pad_index, const char *font, const char *raw_text,
+                                 int fontsize, int y, const char *color) {
+
+    if (!raw_text || raw_text[0] == '\0') {
+        return 0;
+    }
+
+    char text[1024];
+    drawtext_escape(text, sizeof(text), raw_text);
+
+    char next[32];
+    snprintf(next, sizeof(next), "pt%d", (*pad_index)++);
+
+    char segment[2048];
+    int written = snprintf(segment, sizeof(segment),
+             ";[%s]drawtext=fontfile='%s':text='%s':fontsize=%d:fontcolor=%s:"
+             "x=(w-text_w)/2:y=%d[%s]",
+             current, font, text, fontsize, color, y, next);
+
+    if (written < 0 || (size_t)written >= sizeof(segment)) {
+        return AVERROR(ENOMEM);
+    }
+
+    if (strlen(chain) + strlen(segment) + 1 >= chain_size) {
+        return AVERROR(ENOMEM);
+    }
+
+    strcat(chain, segment);
+    snprintf(current, current_size, "%s", next);
+
+    return 0;
+
+}
+
+// build_pause_card_chain composes: full-frame dim, large centered panel, then the
+// title / episode / description / CTA lines. Always terminates the chain at [out].
+static int build_pause_card_chain(const transcode_params_t *params, const streamly_pause_card_t *card,
+                                  char *chain, size_t chain_size) {
+
+    int w = params->width;
+    int h = params->height;
+
+    int panel_x = w * 10 / 100;
+    int panel_y = h * 18 / 100;
+    int panel_w = w * 80 / 100;
+    int panel_h = h * 64 / 100;
+
+    int written = snprintf(chain, chain_size,
+             "[in]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.35:t=fill[dim];"
+             "[dim]drawbox=x=%d:y=%d:w=%d:h=%d:color=black@0.78:t=fill[panel]",
+             panel_x, panel_y, panel_w, panel_h);
+
+    if (written < 0 || (size_t)written >= chain_size) {
+        return AVERROR(ENOMEM);
+    }
+
+    char current[32] = "panel";
+    int pad_index = 0;
+    int ret = 0;
+
+    if (card->font_path && card->font_path[0] != '\0') {
+
+        char font[1024];
+        filter_escape(font, sizeof(font), card->font_path);
+
+        int title_size = h / 16;
+        int subtitle_size = h / 26;
+        int body_size = h / 32;
+        int cta_size = h / 30;
+
+        int cursor = panel_y + h * 6 / 100;
+
+        if (card->title && card->title[0] != '\0') {
+
+            ret = append_pause_drawtext(chain, chain_size, current, sizeof(current), &pad_index,
+                                        font, card->title, title_size, cursor, "white@0.95");
+
+            if (ret < 0) {
+                return ret;
+            }
+
+            cursor += title_size + h * 1 / 100;
+        }
+
+        if (card->subtitle && card->subtitle[0] != '\0') {
+
+            ret = append_pause_drawtext(chain, chain_size, current, sizeof(current), &pad_index,
+                                        font, card->subtitle, subtitle_size, cursor, "white@0.85");
+
+            if (ret < 0) {
+                return ret;
+            }
+
+            cursor += subtitle_size + h * 5 / 100;
+        } else {
+            cursor += h * 2 / 100;
+        }
+
+        for (int i = 0; i < card->body_count && i < STREAMLY_PAUSE_BODY_LINES; i++) {
+
+            ret = append_pause_drawtext(chain, chain_size, current, sizeof(current), &pad_index,
+                                        font, card->body[i], body_size, cursor, "white@0.75");
+
+            if (ret < 0) {
+                return ret;
+            }
+
+            cursor += body_size * 3 / 2;
+        }
+
+        int cta_y = panel_y + panel_h - cta_size - h * 5 / 100;
+
+        ret = append_pause_drawtext(chain, chain_size, current, sizeof(current), &pad_index,
+                                    font, card->cta, cta_size, cta_y, "white@0.9");
+
+        if (ret < 0) {
+            return ret;
+        }
+    }
+
+    char tail[64];
+    written = snprintf(tail, sizeof(tail), ";[%s]copy[out]", current);
+
+    if (written < 0 || (size_t)written >= sizeof(tail) ||
+        strlen(chain) + strlen(tail) + 1 >= chain_size) {
+        return AVERROR(ENOMEM);
+    }
+
+    strcat(chain, tail);
+
+    return 0;
+
+}
+
+// run_pause_card_filter draws the card over base, returning a new filtered frame.
+static int run_pause_card_filter(const transcode_params_t *params, const streamly_pause_card_t *card,
+                                 AVFrame *base, AVFrame **out_frame) {
+
+    char chain[8192];
+
+    int ret = build_pause_card_chain(params, card, chain, sizeof(chain));
+
+    if (ret < 0) {
+        return ret;
+    }
+
+    AVFilterGraph *graph = avfilter_graph_alloc();
+
+    if (!graph) {
+        return AVERROR(ENOMEM);
+    }
+
+    int fps = params->frame_rate > 0 ? params->frame_rate : 30;
+
+    char args[256];
+    snprintf(args, sizeof(args),
+             "video_size=%dx%d:pix_fmt=%d:time_base=1/%d:pixel_aspect=1/1",
+             params->width, params->height, AV_PIX_FMT_YUV420P, fps);
+
+    AVFilterContext *src = NULL;
+    AVFilterContext *sink = NULL;
+
+    ret = avfilter_graph_create_filter(&src, avfilter_get_by_name("buffer"), "in", args, NULL, graph);
+
+    if (ret >= 0) {
+        ret = avfilter_graph_create_filter(&sink, avfilter_get_by_name("buffersink"), "out", NULL, NULL, graph);
+    }
+
+    if (ret >= 0) {
+
+        AVFilterInOut *outputs = avfilter_inout_alloc();
+        AVFilterInOut *inputs = avfilter_inout_alloc();
+
+        if (!outputs || !inputs) {
+            avfilter_inout_free(&inputs);
+            avfilter_inout_free(&outputs);
+            ret = AVERROR(ENOMEM);
+        } else {
+
+            outputs->name = av_strdup("in");
+            outputs->filter_ctx = src;
+            outputs->pad_idx = 0;
+            outputs->next = NULL;
+
+            inputs->name = av_strdup("out");
+            inputs->filter_ctx = sink;
+            inputs->pad_idx = 0;
+            inputs->next = NULL;
+
+            ret = avfilter_graph_parse_ptr(graph, chain, &inputs, &outputs, NULL);
+            avfilter_inout_free(&inputs);
+            avfilter_inout_free(&outputs);
+        }
+    }
+
+    if (ret >= 0) {
+        ret = avfilter_graph_config(graph, NULL);
+    }
+
+    AVFrame *filtered = NULL;
+
+    if (ret >= 0) {
+
+        base->pts = 0;
+        ret = av_buffersrc_add_frame_flags(src, base, AV_BUFFERSRC_FLAG_KEEP_REF);
+
+        if (ret >= 0) {
+            ret = av_buffersrc_add_frame_flags(src, NULL, 0);
+        }
+
+        if (ret >= 0) {
+
+            filtered = av_frame_alloc();
+
+            if (!filtered) {
+                ret = AVERROR(ENOMEM);
+            } else {
+
+                ret = av_buffersink_get_frame(sink, filtered);
+
+                if (ret < 0) {
+                    av_frame_free(&filtered);
+                }
+            }
+        }
+    }
+
+    avfilter_graph_free(&graph);
+
+    if (ret < 0) {
+        return ret;
+    }
+
+    *out_frame = filtered;
+
+    return 0;
+
+}
+
+// encode_pause_idr encodes one frame as a self-contained Annex-B IDR (in-band SPS/PPS).
+static int encode_pause_idr(const transcode_params_t *params, AVFrame *frame,
+                            uint8_t **out_data, int *out_len) {
+
+    const AVCodec *enc = avcodec_find_encoder_by_name("libx264");
+
+    if (!enc) {
+        return AVERROR_ENCODER_NOT_FOUND;
+    }
+
+    AVCodecContext *ctx = avcodec_alloc_context3(enc);
+
+    if (!ctx) {
+        return AVERROR(ENOMEM);
+    }
+
+    int fps = params->frame_rate > 0 ? params->frame_rate : 30;
+
+    ctx->width = params->width;
+    ctx->height = params->height;
+    ctx->pix_fmt = AV_PIX_FMT_YUV420P;
+    ctx->time_base = (AVRational){1, fps};
+    ctx->framerate = (AVRational){fps, 1};
+    ctx->bit_rate = (int64_t)params->bitrate_video_k * 1000;
+    ctx->gop_size = 1;
+    ctx->max_b_frames = 0;
+    ctx->thread_count = 1;
+    ctx->sample_aspect_ratio = (AVRational){1, 1};
+
+    AVDictionary *opts = NULL;
+    av_dict_set(&opts, "preset", "ultrafast", 0);
+    av_dict_set(&opts, "tune", "zerolatency", 0);
+    av_dict_set(&opts, "profile", "baseline", 0);
+    av_dict_set(&opts, "level", "3.1", 0);
+    av_dict_set(&opts, "forced-idr", "1", 0);
+    av_dict_set(&opts, "repeat-headers", "1", 0);
+
+    int ret = avcodec_open2(ctx, enc, &opts);
+    av_dict_free(&opts);
+
+    if (ret < 0) {
+        avcodec_free_context(&ctx);
+        return ret;
+    }
+
+    AVPacket *pkt = av_packet_alloc();
+
+    if (!pkt) {
+        avcodec_free_context(&ctx);
+        return AVERROR(ENOMEM);
+    }
+
+    frame->pts = 0;
+    frame->pict_type = AV_PICTURE_TYPE_I;
+
+    ret = avcodec_send_frame(ctx, frame);
+
+    if (ret >= 0) {
+        ret = avcodec_send_frame(ctx, NULL);
+    }
+
+    uint8_t *data = NULL;
+    int len = 0;
+
+    while (ret >= 0) {
+
+        ret = avcodec_receive_packet(ctx, pkt);
+
+        if (ret < 0) {
+            break;
+        }
+
+        if (!data && pkt->size > 0) {
+
+            data = malloc((size_t)pkt->size);
+
+            if (data) {
+                memcpy(data, pkt->data, (size_t)pkt->size);
+                len = pkt->size;
+            }
+        }
+
+        av_packet_unref(pkt);
+    }
+
+    av_packet_free(&pkt);
+    avcodec_free_context(&ctx);
+
+    if (!data) {
+        return ret == AVERROR_EOF || ret == AVERROR(EAGAIN) ? AVERROR(EIO) : ret;
+    }
+
+    *out_data = data;
+    *out_len = len;
+
+    return 0;
+
+}
+
+int transcode_pause_frame(transcode_handle_t *handle, const streamly_pause_card_t *card,
+                          uint8_t **out_data, int *out_len) {
+
+    if (!handle || !card || !out_data || !out_len) {
+        return AVERROR(EINVAL);
+    }
+
+    *out_data = NULL;
+    *out_len = 0;
+
+    const transcode_params_t *params = &handle->params;
+
+    AVFrame *base = freeze_pick(handle, card->target_pts_ms);
+
+    // No frame yet (paused before first decode) or unexpected geometry: plain card.
+    if (base && (base->format != AV_PIX_FMT_YUV420P ||
+                 base->width != params->width || base->height != params->height)) {
+        av_frame_free(&base);
+    }
+
+    if (!base) {
+        base = alloc_black_frame(params->width, params->height);
+    }
+
+    if (!base) {
+        return AVERROR(ENOMEM);
+    }
+
+    AVFrame *filtered = NULL;
+
+    int ret = run_pause_card_filter(params, card, base, &filtered);
+
+    if (ret >= 0) {
+        ret = encode_pause_idr(params, filtered, out_data, out_len);
+    }
+
+    av_frame_free(&filtered);
+    av_frame_free(&base);
+
+    return ret;
+
+}
+
+void transcode_buffer_free(uint8_t *data) {
+
+    free(data);
+
+}
+
 static char *dup_opt(const char *value) {
 
     if (!value || value[0] == '\0') {
@@ -1742,6 +2271,7 @@ transcode_handle_t *transcode_start(const transcode_params_t *params) {
     handle->params.headers = dup_opt(params->headers);
     handle->exit_code = 0;
     handle->error[0] = '\0';
+    pthread_mutex_init(&handle->freeze_lock, NULL);
 
     if (pthread_create(&handle->thread, NULL, transcode_thread, handle) != 0) {
         transcode_free(handle);
@@ -1776,6 +2306,12 @@ void transcode_free(transcode_handle_t *handle) {
     if (!handle) {
         return;
     }
+
+    for (int i = 0; i < FREEZE_RING_SLOTS; i++) {
+        av_frame_free(&handle->freeze_ring[i]);
+    }
+
+    pthread_mutex_destroy(&handle->freeze_lock);
 
     free((void *)handle->params.subtitle_path);
     free((void *)handle->params.fonts_dir);

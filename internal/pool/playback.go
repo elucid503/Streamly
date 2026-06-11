@@ -2,16 +2,23 @@ package pool
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"streamly/internal/transcode"
 )
 
 const (
 	IntroSkipCTAText     = "Use /skip-intro to jump ahead"
+	PauseCTAText         = "Use /resume to resume playback."
 	liveCTADurationMs    = 8000
 	playbackPollInterval = 2 * time.Second
 	creditsCTAPrefix     = "Check #"
+
+	pauseBodyLineWidth = 64
+	pauseBodyMaxLines  = 3
 )
 
 // SegmentCTA is a transient callout shown at the start of one transcode segment.
@@ -131,6 +138,112 @@ func (session *Session) enrichTranscodeRequest(treq *transcode.Request, offset t
 	if treq.CTAFontPath == "" && session.ctaFontPath != "" {
 		treq.CTAFontPath = session.ctaFontPath
 	}
+
+	if !treq.Live {
+		treq.PauseCard = session.buildPauseCard(treq.Caption)
+	}
+
+}
+
+// buildPauseCard composes the on-stream pause screen from the session's metadata.
+func (session *Session) buildPauseCard(caption string) *transcode.PauseCard {
+
+	card := &transcode.PauseCard{
+		Title:    caption,
+		CTA:      PauseCTAText,
+		FontPath: session.ctaFontPath,
+	}
+
+	if meta := session.Metadata; meta != nil {
+
+		if meta.Details.Title != "" {
+			card.Title = meta.Details.Title
+		} else if meta.VideoName != "" {
+			card.Title = meta.VideoName
+		}
+
+		if meta.Episode != nil {
+
+			card.Subtitle = fmt.Sprintf("S%dE%d", meta.Episode.Season, meta.Episode.Episode)
+
+			name := meta.Episode.Title
+
+			if name == "" {
+				key := fmt.Sprintf("%d:%d", meta.Episode.Season, meta.Episode.Episode)
+				name = meta.Details.EpisodeTitles[key]
+			}
+
+			if name != "" {
+				card.Subtitle += " — " + name
+			}
+
+		}
+
+		card.BodyLines = wrapPauseBody(meta.Details.Description, pauseBodyLineWidth, pauseBodyMaxLines)
+
+	}
+
+	if card.Title == "" {
+		card.Title = "Paused"
+	}
+
+	return card
+
+}
+
+// wrapPauseBody word-wraps a description into at most maxLines lines of width runes,
+// marking truncation with an ellipsis.
+func wrapPauseBody(text string, width, maxLines int) []string {
+
+	words := strings.Fields(text)
+
+	if len(words) == 0 {
+		return nil
+	}
+
+	lines := []string{""}
+
+	for _, word := range words {
+
+		if utf8.RuneCountInString(word) > width {
+			word = truncateRunes(word, width)
+		}
+
+		line := lines[len(lines)-1]
+
+		switch {
+		case line == "":
+			lines[len(lines)-1] = word
+		case utf8.RuneCountInString(line)+1+utf8.RuneCountInString(word) <= width:
+			lines[len(lines)-1] = line + " " + word
+		default:
+			lines = append(lines, word)
+		}
+
+	}
+
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+		lines[maxLines-1] = truncateRunes(lines[maxLines-1], width-3) + "..."
+	}
+
+	return lines
+
+}
+
+func truncateRunes(text string, max int) string {
+
+	if max <= 0 {
+		return ""
+	}
+
+	runes := []rune(text)
+
+	if len(runes) <= max {
+		return text
+	}
+
+	return string(runes[:max])
 
 }
 

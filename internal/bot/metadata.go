@@ -51,7 +51,7 @@ func metadataFromStream(details media.TitleDetails, shareKey string, fid int, vi
 	var poolEpisode *pool.EpisodeRef
 
 	if episode != nil {
-		poolEpisode = &pool.EpisodeRef{Season: episode.Season, Episode: episode.Episode}
+		poolEpisode = &pool.EpisodeRef{Season: episode.Season, Episode: episode.Episode, Title: episode.Title}
 	}
 
 	return &pool.StreamMetadata{

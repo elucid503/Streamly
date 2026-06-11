@@ -39,6 +39,15 @@ type CTAWindow struct {
 	EndMs   int64
 }
 
+// PauseCard is the on-stream pause screen content, composed over the frozen frame.
+type PauseCard struct {
+	Title     string
+	Subtitle  string   // "Season X - Episode Y" line; empty for movies.
+	BodyLines []string // Pre-wrapped description; at most pauseCardBodyLines are drawn.
+	CTA       string
+	FontPath  string
+}
+
 // Request describes one libav transcode job fed from in-process media readers.
 type Request struct {
 	Source       InputReader // Progressive media, muxed audio+video.
@@ -51,6 +60,7 @@ type Request struct {
 	FontsDir     string        // Directory containing font.ttf for libass.
 	CTAFontPath  string        // Font file for drawtext overlays; empty disables CTAs.
 	CTAs         []CTAWindow   // Timed bottom-left callouts for this segment.
+	PauseCard    *PauseCard    // On-stream pause screen content; nil disables the pause card.
 	Context      context.Context
 
 	OnDuration func(durationMs int64) // Called once when the container duration is known.
@@ -59,12 +69,25 @@ type Request struct {
 	SupplyCTAs func(probedDurationMs int64, startMs int64) (fontPath string, windows []CTAWindow)
 }
 
+// pauseFrameEncoder renders the pause card into one encoded IDR frame; cgo-only.
+type pauseFrameEncoder interface {
+	encodePauseFrame(card *PauseCard, targetPTSMs int64) ([]byte, error)
+}
+
 // Session is a running transcode: encoded video/audio feeds, completion state, and pause control.
 type Session struct {
 	Video  <-chan Packet
 	Audio  <-chan Packet
 	Done   <-chan error
 	pause *pauseState
+
+	card    *PauseCard
+	encoder pauseFrameEncoder
+
+	frameMu    sync.Mutex
+	frameEpoch uint64
+	frameData  []byte
+	frameBad   bool
 }
 
 // Pause stops reading from inputs; backpressure stalls the libav pipeline without signals.
@@ -82,6 +105,57 @@ func (s *Session) Resume() {
 	if s.pause != nil {
 		s.pause.Resume()
 	}
+
+}
+
+// IsPaused reports the current pause state without blocking.
+func (s *Session) IsPaused() bool {
+
+	if s.pause == nil {
+		return false
+	}
+
+	paused, _ := s.pause.snapshot()
+
+	return paused
+
+}
+
+// PauseFrame returns the encoded pause-screen IDR for the current pause, rendering it
+// once per pause over the frozen frame nearest targetPTSMs (the last video PTS sent;
+// negative freezes the newest frame). Returns false when no card is configured,
+// playback is not paused, or rendering failed.
+func (s *Session) PauseFrame(targetPTSMs int64) ([]byte, bool) {
+
+	if s.pause == nil || s.card == nil || s.encoder == nil {
+		return nil, false
+	}
+
+	paused, epoch := s.pause.snapshot()
+
+	if !paused {
+		return nil, false
+	}
+
+	s.frameMu.Lock()
+	defer s.frameMu.Unlock()
+
+	if s.frameEpoch == epoch && (s.frameData != nil || s.frameBad) {
+		return s.frameData, s.frameData != nil
+	}
+
+	data, err := s.encoder.encodePauseFrame(s.card, targetPTSMs)
+
+	s.frameEpoch = epoch
+	s.frameData = data
+	s.frameBad = err != nil
+
+	if err != nil {
+		log.Printf("[transcode] pause card render failed: %v", err)
+		return nil, false
+	}
+
+	return data, true
 
 }
 
@@ -146,6 +220,17 @@ func (p *pauseState) Resume() {
 	p.epoch++
 	p.since = time.Time{}
 	p.paused = false
+
+}
+
+// snapshot returns the pause flag and the current epoch (epoch increments on resume,
+// so it uniquely identifies one pause while paused).
+func (p *pauseState) snapshot() (bool, uint64) {
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.paused, p.epoch
 
 }
 

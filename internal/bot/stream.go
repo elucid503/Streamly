@@ -180,6 +180,12 @@ func (b *Bot) handleStream(s *discordgo.Session, i *discordgo.InteractionCreate)
 		return
 	}
 
+	if epTitles := b.Resolver.EpisodeList(details.IMDBId, 1); epTitles != nil {
+		for idx := range episodes {
+			episodes[idx].Title = epTitles[episodes[idx].Number]
+		}
+	}
+
 	embed := baseEmbed(details, "Select an Episode")
 	components := []discordgo.MessageComponent{episodeRow(selection.ID, shareKey, 1, episodes)}
 	editMessage(s, i, &discordgo.WebhookEdit{Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}), Components: ptrComponents(components)})
@@ -234,6 +240,12 @@ func (b *Bot) handleSelect(s *discordgo.Session, i *discordgo.InteractionCreate,
 			return
 		}
 
+		if epTitles := b.Resolver.EpisodeList(details.IMDBId, season); epTitles != nil {
+			for i := range episodes {
+				episodes[i].Title = epTitles[episodes[i].Number]
+			}
+		}
+
 		embed := baseEmbed(details, "Select an Episode")
 		components := []discordgo.MessageComponent{episodeRow(id, shareKey, season, episodes)}
 		editMessage(s, i, &discordgo.WebhookEdit{Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}), Components: ptrComponents(components)})
@@ -258,6 +270,14 @@ func (b *Bot) handleSelect(s *discordgo.Session, i *discordgo.InteractionCreate,
 			details = media.TitleDetails{Title: "Your Selection"}
 		}
 
+		epTitle := details.EpisodeTitles[fmt.Sprintf("%d:%d", season, episode)]
+
+		if epTitle == "" {
+			if epTitles := b.Resolver.EpisodeList(details.IMDBId, season); epTitles != nil {
+				epTitle = epTitles[episode]
+			}
+		}
+
 		videoName := b.Resolver.FileName(shareKey, fid)
 
 		autoNext := &pool.AutoNextContext{
@@ -271,7 +291,7 @@ func (b *Bot) handleSelect(s *discordgo.Session, i *discordgo.InteractionCreate,
 			UserID:         userID(i),
 		}
 
-		b.startStream(s, i, details, shareKey, fid, videoName, &episodeRef{Season: season, Episode: episode}, fmt.Sprintf("%d:%d", febapi.BoxSeries, id), autoNext)
+		b.startStream(s, i, details, shareKey, fid, videoName, &episodeRef{Season: season, Episode: episode, Title: epTitle}, fmt.Sprintf("%d:%d", febapi.BoxSeries, id), autoNext)
 
 	}
 
@@ -280,6 +300,7 @@ func (b *Bot) handleSelect(s *discordgo.Session, i *discordgo.InteractionCreate,
 type episodeRef struct {
 	Season  int
 	Episode int
+	Title   string
 }
 
 func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, details media.TitleDetails, shareKey string, fid int, videoName string, episode *episodeRef, historyValue string, autoNext *pool.AutoNextContext) {
@@ -699,7 +720,11 @@ func streamingEmbed(details media.TitleDetails, channelID string, episode *episo
 	embed := baseEmbed(details, "Now Streaming")
 
 	if episode != nil {
-		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{Name: "Now Playing", Value: fmt.Sprintf("Season %d · Episode %d", episode.Season, episode.Episode), Inline: true})
+		ep := fmt.Sprintf("S%dE%d", episode.Season, episode.Episode)
+		if episode.Title != "" {
+			ep += " — " + episode.Title
+		}
+		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{Name: "Now Playing", Value: ep, Inline: true})
 	}
 
 	if details.IMDBRating != "" {
@@ -766,6 +791,7 @@ type episode struct {
 	FID      int
 	Number   int
 	FileName string
+	Title    string
 }
 
 func seasonRow(id int, shareKey string, seasons []febapi.FebboxFile) discordgo.ActionsRow {
@@ -797,8 +823,14 @@ func episodeRow(id int, shareKey string, season int, episodes []episode) discord
 
 	for _, ep := range episodes {
 
+		label := fmt.Sprintf("Episode %d", ep.Number)
+
+		if ep.Title != "" {
+			label = truncate(fmt.Sprintf("E%d • %s", ep.Number, ep.Title), 100)
+		}
+
 		options = append(options, discordgo.SelectMenuOption{
-			Label: fmt.Sprintf("Episode %d", ep.Number),
+			Label: label,
 			Value: fmt.Sprintf("%d:%d", ep.FID, ep.Number),
 		})
 

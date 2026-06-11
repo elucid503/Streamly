@@ -29,6 +29,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	"streamly/internal/config"
@@ -226,6 +227,13 @@ func streamly_fill_ctas(user C.uintptr_t, params *C.transcode_params_t) {
 		params.cta_font_path = C.CString(fontPath)
 	}
 
+	fillCTAWindows(params, windows)
+
+}
+
+// fillCTAWindows marshals non-empty CTA windows into the C params, capped at STREAMLY_MAX_CTA.
+func fillCTAWindows(params *C.transcode_params_t, windows []CTAWindow) {
+
 	ctaCount := 0
 
 	for _, window := range windows {
@@ -234,7 +242,7 @@ func streamly_fill_ctas(user C.uintptr_t, params *C.transcode_params_t) {
 			continue
 		}
 
-		copyCTAText(&params.ctas[ctaCount].text[0], truncateCTAText(window.Text, 191))
+		copyCTAText(&params.ctas[ctaCount].text[0], truncateCTAText(window.Text, ctaTextLimit))
 
 		params.ctas[ctaCount].start_ms = C.int64_t(window.StartMs)
 		params.ctas[ctaCount].end_ms = C.int64_t(window.EndMs)
@@ -243,6 +251,84 @@ func streamly_fill_ctas(user C.uintptr_t, params *C.transcode_params_t) {
 	}
 
 	params.cta_count = C.int(ctaCount)
+
+}
+
+// nativeState guards the C handle so the pause-card encoder can run on any goroutine
+// while the joiner owns teardown: the handle is nil'd under mu before transcode_free.
+type nativeState struct {
+	mu     sync.Mutex
+	handle *C.transcode_handle_t
+}
+
+// release invalidates the handle for new callers and returns it for freeing.
+// It locks, so an in-flight encodePauseFrame finishes before teardown proceeds.
+func (n *nativeState) release() *C.transcode_handle_t {
+
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	handle := n.handle
+	n.handle = nil
+
+	return handle
+
+}
+
+func (n *nativeState) encodePauseFrame(card *PauseCard, targetPTSMs int64) ([]byte, error) {
+
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	if n.handle == nil {
+		return nil, fmt.Errorf("transcode already finished")
+	}
+
+	cCard := C.streamly_pause_card_t{
+		font_path:     C.CString(card.FontPath),
+		title:         C.CString(card.Title),
+		subtitle:      C.CString(card.Subtitle),
+		cta:           C.CString(card.CTA),
+		target_pts_ms: C.int64_t(targetPTSMs),
+	}
+
+	defer freeCString(cCard.font_path)
+	defer freeCString(cCard.title)
+	defer freeCString(cCard.subtitle)
+	defer freeCString(cCard.cta)
+
+	bodyCount := 0
+
+	for _, line := range card.BodyLines {
+
+		if bodyCount >= int(C.STREAMLY_PAUSE_BODY_LINES) || line == "" {
+			continue
+		}
+
+		cCard.body[bodyCount] = C.CString(line)
+		bodyCount++
+
+	}
+
+	cCard.body_count = C.int(bodyCount)
+
+	defer func() {
+		for i := 0; i < bodyCount; i++ {
+			freeCString(cCard.body[i])
+		}
+	}()
+
+	var data *C.uint8_t
+	var length C.int
+
+	if code := C.transcode_pause_frame(n.handle, &cCard, &data, &length); code != 0 {
+		return nil, fmt.Errorf("pause frame encode failed (%d)", int(code))
+	}
+
+	frame := C.GoBytes(unsafe.Pointer(data), length)
+	C.transcode_buffer_free(data)
+
+	return frame, nil
 
 }
 
@@ -344,23 +430,7 @@ func startNative(request Request) (*Session, error) {
 		abort_flag:          abortFlag,
 	}
 
-	ctaCount := 0
-
-	for _, window := range request.CTAs {
-
-		if ctaCount >= int(C.STREAMLY_MAX_CTA) || window.Text == "" {
-			continue
-		}
-
-		copyCTAText(&params.ctas[ctaCount].text[0], truncateCTAText(window.Text, 191))
-
-		params.ctas[ctaCount].start_ms = C.int64_t(window.StartMs)
-		params.ctas[ctaCount].end_ms = C.int64_t(window.EndMs)
-		ctaCount++
-
-	}
-
-	params.cta_count = C.int(ctaCount)
+	fillCTAWindows(&params, request.CTAs)
 
 	if request.Source != nil {
 		params.read_cb = C.streamly_read_cb(C.streamlyInputRead)
@@ -386,6 +456,8 @@ func startNative(request Request) (*Session, error) {
 		return nil, fmt.Errorf("failed to start libav transcode")
 	}
 
+	native := &nativeState{handle: handle}
+
 	go func() {
 
 		exitCode := C.transcode_join(handle)
@@ -402,6 +474,9 @@ func startNative(request Request) (*Session, error) {
 			doneErr = transcodeError(handle, int(exitCode))
 		}
 
+		// Waits for any in-flight pause-card encode before the handle is freed.
+		native.release()
+
 		C.transcode_free(handle)
 		trimNativeHeap()
 
@@ -414,12 +489,19 @@ func startNative(request Request) (*Session, error) {
 
 	}()
 
-	return &Session{
+	session := &Session{
 		Video: video,
 		Audio: audio,
 		Done:  done,
 		pause: pause,
-	}, nil
+	}
+
+	if request.PauseCard != nil {
+		session.card = request.PauseCard
+		session.encoder = native
+	}
+
+	return session, nil
 
 }
 
@@ -479,29 +561,34 @@ func freeCString(value *C.char) {
 
 }
 
+// ctaTextLimit is the C-side capacity (192 bytes) minus the NUL terminator.
+const ctaTextLimit = 191
+
 func copyCTAText(dest *C.char, text string) {
 
-	limit := len(text)
+	text = truncateCTAText(text, ctaTextLimit)
 
-	if limit > 191 {
-		limit = 191
-	}
-
-	for index := 0; index < limit; index++ {
-		*(*C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(dest)) + uintptr(index))) = C.char(text[index])
-	}
-
-	*(*C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(dest)) + uintptr(limit))) = 0
+	out := unsafe.Slice((*byte)(unsafe.Pointer(dest)), len(text)+1)
+	copy(out, text)
+	out[len(text)] = 0
 
 }
 
+// truncateCTAText caps text at max bytes without splitting a UTF-8 sequence,
+// which would feed invalid bytes to drawtext and render replacement glyphs.
 func truncateCTAText(text string, max int) string {
 
 	if len(text) <= max {
 		return text
 	}
 
-	return text[:max]
+	cut := max
+
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+
+	return text[:cut]
 
 }
 

@@ -10,6 +10,7 @@ import (
 type EpisodeRef struct {
 	Season  int
 	Episode int
+	Title   string
 }
 
 // AutoNextContext holds everything needed to queue the next TV episode.

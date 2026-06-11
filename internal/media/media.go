@@ -12,6 +12,7 @@ import (
 	"streamly/internal/febapi"
 	"streamly/internal/source"
 	"streamly/internal/tvapi"
+	"streamly/internal/tvmaze"
 )
 
 const movie = febapi.BoxMovie // Showbox's discriminator for a movie.
@@ -34,11 +35,12 @@ type TitleDetails struct {
 	EpisodeTitles map[string]string
 }
 
-// Resolver bridges Showbox search, Febbox browsing, and live TV into what the bot needs to stream.
+// Resolver bridges Showbox search, Febbox browsing, live TV, and episode metadata into what the bot needs to stream.
 type Resolver struct {
 	showbox *febapi.ShowboxClient
 	febbox  *febapi.FebboxClient
 	tv      *tvapi.TVClient
+	tvmaze  *tvmaze.Client
 }
 
 func NewResolver() *Resolver {
@@ -47,6 +49,7 @@ func NewResolver() *Resolver {
 		showbox: febapi.NewShowboxClient(febapi.ShowboxOptions{}),
 		febbox:  febapi.NewFebboxClient(febapi.FebboxOptions{Cookie: config.App.FebboxCookie}),
 		tv:      tvapi.NewTVClient(tvapi.TVOptions{}),
+		tvmaze:  tvmaze.NewClient(),
 	}
 
 }
@@ -121,6 +124,24 @@ func (r *Resolver) Details(selection Selection) (TitleDetails, error) {
 		IMDBId:        text("imdb_id"),
 		EpisodeTitles: episodeTitleMap(raw),
 	}, nil
+
+}
+
+// EpisodeList fetches per-episode titles for a TV season via TVmaze, keyed by the show's IMDB ID.
+// Returns nil when the IMDB ID is empty or the show/season is not found.
+func (r *Resolver) EpisodeList(imdbID string, season int) map[int]string {
+
+	if imdbID == "" {
+		return nil
+	}
+
+	titles, err := r.tvmaze.EpisodeTitles(imdbID, season)
+
+	if err != nil || len(titles) == 0 {
+		return nil
+	}
+
+	return titles
 
 }
 

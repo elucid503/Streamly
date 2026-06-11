@@ -251,6 +251,49 @@ func (c *ShowboxClient) GetShow(showID int) (map[string]any, error) {
 
 }
 
+// GetEpisodeList fetches the list of episodes for a TV series season, returning a map of episode number to title.
+// Returns an empty map (not an error) when the API provides no episode-level data for that season.
+func (c *ShowboxClient) GetEpisodeList(showID, season int) (map[int]string, error) {
+
+	var data map[string]any
+
+	err := c.request("TV_detail_v2", map[string]any{"tid": showID, "season": season}, &data)
+
+	if err != nil {
+		return nil, err
+	}
+
+	episodes, _ := data["episode"].([]any)
+
+	titles := make(map[int]string, len(episodes))
+
+	for _, item := range episodes {
+
+		ep, ok := item.(map[string]any)
+
+		if !ok {
+			continue
+		}
+
+		epSeason, _ := ep["season"].(float64)
+
+		if int(epSeason) != season {
+			continue
+		}
+
+		num, _ := ep["episode"].(float64)
+		title := strings.TrimSpace(fmt.Sprint(ep["title"]))
+
+		if num > 0 && title != "" && title != "<nil>" {
+			titles[int(num)] = title
+		}
+
+	}
+
+	return titles, nil
+
+}
+
 // GetFebBoxID resolves the Febbox share key that hosts a title's files. Pass the id and box_type from a SearchResult.
 func (c *ShowboxClient) GetFebBoxID(id int, boxType BoxType) (string, error) {
 

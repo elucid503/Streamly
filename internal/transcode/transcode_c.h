@@ -7,6 +7,7 @@
 #define STREAMLY_KIND_VIDEO 0
 #define STREAMLY_KIND_AUDIO 1
 #define STREAMLY_MAX_CTA 4
+#define STREAMLY_PAUSE_BODY_LINES 4
 
 // Whence values for streamly_seek_cb; 0..2 match SEEK_SET/SEEK_CUR/SEEK_END.
 #define STREAMLY_SEEK_SIZE 3
@@ -62,10 +63,32 @@ typedef struct {
     volatile bool *abort_flag;  // Shared with Go; set on context cancel.
 } transcode_params_t;
 
+// streamly_pause_card_t is the text content of the on-stream pause screen overlay.
+// All strings are borrowed for the duration of the call; empty/NULL fields are skipped.
+typedef struct {
+    const char *font_path;  // drawtext font; without it the card is frame + dim only.
+    const char *title;
+    const char *subtitle;   // "Season X - Episode Y" line for TV; NULL for movies.
+    const char *body[STREAMLY_PAUSE_BODY_LINES]; // Pre-wrapped description lines.
+    int body_count;
+    const char *cta;        // Bottom call-to-action line.
+    int64_t target_pts_ms;  // Output PTS of the last frame the viewer saw; -1 takes the newest.
+} streamly_pause_card_t;
+
 typedef struct transcode_handle transcode_handle_t;
 
 // transcode_start launches the libav worker thread; returns NULL on allocation failure.
 transcode_handle_t *transcode_start(const transcode_params_t *params);
+
+// transcode_pause_frame composes the pause screen over the frozen frame nearest
+// card->target_pts_ms and encodes it as one self-contained Annex-B IDR frame.
+// Returns 0 and a malloc'd buffer in *out_data (free with transcode_buffer_free),
+// or a negative AVERROR. Safe to call from any thread while the worker runs.
+int transcode_pause_frame(transcode_handle_t *handle, const streamly_pause_card_t *card,
+                          uint8_t **out_data, int *out_len);
+
+// transcode_buffer_free releases a buffer returned by transcode_pause_frame.
+void transcode_buffer_free(uint8_t *data);
 
 // transcode_join blocks until the worker exits; returns 0 on success.
 int transcode_join(transcode_handle_t *handle);
