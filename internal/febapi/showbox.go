@@ -284,7 +284,7 @@ func (c *ShowboxClient) GetEpisodeList(showID, season int) (map[int]string, erro
 		}
 
 		num, _ := ep["episode"].(float64)
-		title := strings.TrimSpace(fmt.Sprint(ep["title"]))
+		title := DecodeText(fmt.Sprint(ep["title"]))
 
 		if num > 0 && title != "" && title != "<nil>" {
 			titles[int(num)] = title

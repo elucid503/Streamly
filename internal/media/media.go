@@ -116,7 +116,7 @@ func (r *Resolver) Details(selection Selection) (TitleDetails, error) {
 		if !ok || value == nil || value == "" {
 			return ""
 		}
-		return fmt.Sprint(value)
+		return febapi.DecodeText(fmt.Sprint(value))
 	}
 
 	return TitleDetails{
@@ -349,7 +349,7 @@ func episodeTitleMap(raw map[string]any) map[string]string {
 
 		season, _ := data["season"].(float64)
 		number, _ := data["episode"].(float64)
-		title := strings.TrimSpace(fmt.Sprint(data["title"]))
+		title := febapi.DecodeText(fmt.Sprint(data["title"]))
 
 		if season > 0 && number > 0 && title != "" {
 			titles[fmt.Sprintf("%d:%d", int(season), int(number))] = title
