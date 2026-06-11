@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -93,7 +94,7 @@ func FebboxStreamHeaders() map[string]string {
 
 }
 
-// TVBaseURL returns the live TV site origin used for API calls and Referer headers.
+// TVBaseURL returns the live TV catalog origin used for channel listings.
 func TVBaseURL() string {
 
 	base := strings.TrimSpace(os.Getenv("TV_BASE_URL"))
@@ -106,13 +107,41 @@ func TVBaseURL() string {
 
 }
 
+// TVStreamAPI returns the resolve endpoint prefix for live TV HLS playlists.
+func TVStreamAPI() string {
+
+	api := strings.TrimSpace(os.Getenv("TV_STREAM_API"))
+
+	if api == "" {
+		return "https://chat.cfbu247.sbs/api/resolve-dlstream/"
+	}
+
+	return api
+
+}
+
+// TVStreamReferer returns the origin sent as Referer for proxied live TV playlists.
+func TVStreamReferer() string {
+
+	api := TVStreamAPI()
+
+	parsed, err := url.Parse(api)
+
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "https://cfbu247.sbs/"
+	}
+
+	return parsed.Scheme + "://" + parsed.Host + "/"
+
+}
+
 // TVStreamHeaders presents a browser tab for proxied live TV HLS playlists.
 func TVStreamHeaders() map[string]string {
 
 	return map[string]string{
 		"User-Agent":      browserUA,
 		"Accept-Language": "en-US,en;q=0.9",
-		"Referer":         TVBaseURL() + "/",
+		"Referer":         TVStreamReferer(),
 	}
 
 }

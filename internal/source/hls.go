@@ -12,8 +12,8 @@ func IsHlsURL(raw string) bool {
 		return true
 	}
 
-	// dami-tv.pro proxies live playlists without a .m3u8 suffix in the path.
-	if strings.Contains(path, "/papi/tv/playlist/") {
+	// Proxied live playlists often omit a .m3u8 suffix in the path.
+	if strings.Contains(path, "/papi/tv/playlist/") || strings.Contains(path, "/api/proxy/playlist") {
 		return true
 	}
 

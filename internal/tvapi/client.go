@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	defaultBaseURL    = "https://dami-tv.pro"
-	channelsPath      = "/data/tv-channels.json?v=302"
-	resolvePathPrefix = "/papi/tv/resolve/"
+	defaultBaseURL     = "https://dami-tv.pro"
+	defaultStreamAPI   = "https://chat.cfbu247.sbs/api/resolve-dlstream/"
+	channelsPath       = "/data/tv-channels.json?v=302"
+	legacyResolvePath  = "/papi/tv/resolve/"
 
 	catalogTTL = 15 * time.Minute // How long the tv-channels.json catalog stays cached.
 )
@@ -25,7 +26,7 @@ type TVOptions struct {
 	BaseURL string // API base URL. Defaults to TV_BASE_URL env or dami-tv.pro.
 }
 
-// TVClient fetches channel listings and resolves HLS streams from dami-tv.pro.
+// TVClient fetches channel listings and resolves HLS streams from the tv247 backend.
 type TVClient struct {
 	baseURL string
 	client  *http.Client
@@ -66,7 +67,7 @@ func (c *TVClient) ListChannels() (*ChannelCatalog, error) {
 
 	u := c.baseURL + channelsPath
 
-	response, err := c.get(u)
+	response, err := c.get(u, c.baseURL+"/")
 
 	if err != nil {
 		return nil, fmt.Errorf("fetch channels: %w", err)
@@ -102,9 +103,13 @@ func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
 		return "", fmt.Errorf("daddyId is required")
 	}
 
-	u := c.baseURL + resolvePathPrefix + url.PathEscape(daddyID)
+	resolveURL, referer, err := c.resolveEndpoint(daddyID)
 
-	response, err := c.get(u)
+	if err != nil {
+		return "", err
+	}
+
+	response, err := c.get(resolveURL, referer)
 
 	if err != nil {
 		return "", fmt.Errorf("resolve stream: %w", err)
@@ -130,15 +135,113 @@ func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
 
 	}
 
-	var result ResolveResult
+	streamURL, err := parseResolveResponse(body)
 
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err != nil {
+		return "", err
+	}
+
+	if streamURL == "" {
+		return "", fmt.Errorf("resolve failed: empty stream path")
+	}
+
+	if !strings.HasPrefix(streamURL, "http://") && !strings.HasPrefix(streamURL, "https://") {
+
+		if !strings.HasPrefix(streamURL, "/") {
+			streamURL = "/" + streamURL
+		}
+
+		streamURL = c.baseURL + streamURL
+
+	}
+
+	return streamURL, nil
+
+}
+
+func (c *TVClient) resolveEndpoint(daddyID string) (resolveURL, referer string, err error) {
+
+	streamAPI := c.streamAPI()
+
+	if streamAPI != "" {
+
+		resolveURL = joinStreamAPI(streamAPI, daddyID)
+		referer = streamAPIOrigin(streamAPI) + "/"
+
+		return resolveURL, referer, nil
+
+	}
+
+	resolveURL = c.baseURL + legacyResolvePath + url.PathEscape(daddyID)
+	referer = c.baseURL + "/"
+
+	return resolveURL, referer, nil
+
+}
+
+func (c *TVClient) streamAPI() string {
+
+	if cached := c.cachedCatalog(); cached != nil && strings.TrimSpace(cached.StreamAPI) != "" {
+		return strings.TrimSpace(cached.StreamAPI)
+	}
+
+	if override := strings.TrimSpace(os.Getenv("TV_STREAM_API")); override != "" {
+		return override
+	}
+
+	return defaultStreamAPI
+
+}
+
+func joinStreamAPI(streamAPI, daddyID string) string {
+
+	streamAPI = strings.TrimSpace(streamAPI)
+
+	if strings.Contains(streamAPI, "?") {
+		return streamAPI + url.QueryEscape(daddyID)
+	}
+
+	return strings.TrimRight(streamAPI, "/") + "/" + url.PathEscape(daddyID)
+
+}
+
+func streamAPIOrigin(streamAPI string) string {
+
+	parsed, err := url.Parse(strings.TrimSpace(streamAPI))
+
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "https://cfbu247.sbs"
+	}
+
+	return parsed.Scheme + "://" + parsed.Host
+
+}
+
+func parseResolveResponse(body []byte) (string, error) {
+
+	var tv247 TV247ResolveResult
+
+	if err := json.Unmarshal(body, &tv247); err == nil {
+
+		if tv247.Error != "" {
+			return "", fmt.Errorf("resolve failed: %s", tv247.Error)
+		}
+
+		if tv247.ProxyPlaylistURL != "" {
+			return tv247.ProxyPlaylistURL, nil
+		}
+
+	}
+
+	var legacy ResolveResult
+
+	if err := json.Unmarshal(body, &legacy); err != nil {
 		return "", fmt.Errorf("decode resolve response: %w", err)
 	}
 
-	if !result.Success {
+	if !legacy.Success {
 
-		msg := result.Error
+		msg := legacy.Error
 
 		if msg == "" {
 			msg = string(body)
@@ -148,11 +251,11 @@ func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
 
 	}
 
-	if result.Stream == "" {
-		return "", fmt.Errorf("resolve failed: empty stream path")
+	if legacy.Stream == "" {
+		return "", nil
 	}
 
-	streamPath := result.Stream
+	streamPath := legacy.Stream
 
 	if strings.HasPrefix(streamPath, "http://") || strings.HasPrefix(streamPath, "https://") {
 		return streamPath, nil
@@ -162,7 +265,7 @@ func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
 		streamPath = "/" + streamPath
 	}
 
-	return c.baseURL + streamPath, nil
+	return streamPath, nil
 
 }
 
@@ -207,7 +310,7 @@ func (c *TVClient) storeCatalog(catalog *ChannelCatalog) {
 const tvBrowserUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
 	"(KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
 
-func (c *TVClient) get(rawURL string) (*http.Response, error) {
+func (c *TVClient) get(rawURL, referer string) (*http.Response, error) {
 
 	request, err := http.NewRequest(http.MethodGet, rawURL, nil)
 
@@ -215,9 +318,13 @@ func (c *TVClient) get(rawURL string) (*http.Response, error) {
 		return nil, err
 	}
 
+	if referer == "" {
+		referer = streamAPIOrigin(c.streamAPI()) + "/"
+	}
+
 	request.Header.Set("User-Agent", tvBrowserUA)
 	request.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	request.Header.Set("Referer", c.baseURL+"/")
+	request.Header.Set("Referer", referer)
 
 	return c.client.Do(request)
 

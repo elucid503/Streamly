@@ -37,10 +37,19 @@ type ChannelCatalog struct {
 	Channels []Channel `json:"channels"`
 }
 
-// ResolveResult is returned by /papi/tv/resolve/{daddyId}.
+// ResolveResult is the legacy dami-tv.pro resolve payload.
 type ResolveResult struct {
 	Success bool   `json:"success"`
 	Stream  string `json:"stream"`
+
+	Error string `json:"error"`
+}
+
+// TV247ResolveResult is returned by the tv247 resolve-dlstream API.
+type TV247ResolveResult struct {
+	ChannelID        string `json:"channelId"`
+	ProxyPlaylistURL string `json:"proxyPlaylistUrl"`
+	ProxyPlayerURL   string `json:"proxyPlayerUrl"`
 
 	Error string `json:"error"`
 }
