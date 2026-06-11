@@ -39,17 +39,17 @@ type QualityResolver func(attempt int) (string, error)
 
 // Request is everything a session needs to download, transcode, and play one title.
 type Request struct {
-	GuildID      string
-	ChannelID    string
-	Caption      string // Log tag and stats label.
-	InitialURL   string
-	ResolveURL   source.UrlResolver
-	QualityURL   QualityResolver // Optional Febbox quality fallbacks when transcode fails.
-	QualityLabel string
-	Headers         map[string]string // HTTP headers for HLS/direct input; defaults to Febbox when nil.
-	ResolveHeaders  func() map[string]string // Optional live-TV header refresh on reconnect.
-	Live            bool // Live streams cannot be paused and re-resolve on expiry.
-	OnClose      func(CloseReason)
+	GuildID        string
+	ChannelID      string
+	Caption        string // Log tag and stats label.
+	InitialURL     string
+	ResolveURL     source.UrlResolver
+	QualityURL     QualityResolver // Optional Febbox quality fallbacks when transcode fails.
+	QualityLabel   string
+	Headers        map[string]string        // HTTP headers for HLS/direct input; defaults to Febbox when nil.
+	ResolveHeaders func() map[string]string // Optional live-TV header refresh on reconnect.
+	Live           bool                     // Live streams cannot be paused and re-resolve on expiry.
+	OnClose        func(CloseReason)
 }
 
 // Session is a single selfbot account streaming to one voice channel at a time.
@@ -650,8 +650,11 @@ func playbackURLForAttempt(request Request, attempt int) (string, error) {
 }
 
 const (
-	hlsStartupRetryWindow = 15 * time.Second
-	liveReconnectDelay    = 2 * time.Second
+	hlsStartupRetryWindow   = 15 * time.Second
+	liveReconnectDelayMin   = 2 * time.Second
+	liveReconnectDelayMax   = 15 * time.Second
+	liveResolveRetries      = 3
+	liveStableSegmentWindow = 30 * time.Second
 )
 
 // playHLS never seeks: Seek refuses HLS sources outright (broken libav fMP4 seek).
@@ -724,11 +727,98 @@ func (p *Pool) playVodHLS(ctx context.Context, session *Session, playback *strea
 
 }
 
+// liveFailureCountAfterSegment updates the reconnect backoff counter from one live segment result.
+func liveFailureCountAfterSegment(consecutiveFailures int, segmentDuration time.Duration, cleanEnd bool) int {
+
+	if segmentDuration >= liveStableSegmentWindow {
+		return 0
+	}
+
+	if cleanEnd {
+		return consecutiveFailures
+	}
+
+	return consecutiveFailures + 1
+
+}
+
+// liveReconnectDelay backs off briefly on repeated upstream failures without delaying healthy drops.
+func liveReconnectDelay(consecutiveFailures int) time.Duration {
+
+	if consecutiveFailures <= 1 {
+		return liveReconnectDelayMin
+	}
+
+	shift := consecutiveFailures - 1
+
+	if shift > 3 {
+		shift = 3
+	}
+
+	delay := liveReconnectDelayMin * time.Duration(1<<shift)
+
+	if delay > liveReconnectDelayMax {
+		return liveReconnectDelayMax
+	}
+
+	return delay
+
+}
+
+// refreshLiveUpstream re-resolves the HLS URL and headers before a reconnect attempt.
+func refreshLiveUpstream(ctx context.Context, request Request, currentURL string, currentHeaders map[string]string) (string, map[string]string) {
+
+	url := currentURL
+	headers := currentHeaders
+
+	for retry := 0; retry < liveResolveRetries; retry++ {
+
+		if ctx.Err() != nil {
+			return url, headers
+		}
+
+		if request.ResolveURL != nil {
+
+			fresh, err := request.ResolveURL()
+
+			if err == nil && fresh != "" {
+				url = fresh
+			} else if err != nil {
+				log.Printf(`[stream] live URL re-resolve failed for "%s" (attempt %d/%d): %v`, request.Caption, retry+1, liveResolveRetries, err)
+			}
+
+		}
+
+		if request.ResolveHeaders != nil {
+
+			if fresh := request.ResolveHeaders(); len(fresh) > 0 {
+				headers = fresh
+			}
+
+		}
+
+		if request.ResolveURL == nil || url != "" {
+			return url, headers
+		}
+
+		select {
+		case <-ctx.Done():
+			return url, headers
+		case <-time.After(500 * time.Millisecond):
+		}
+
+	}
+
+	return url, headers
+
+}
+
 // playLiveHLS keeps the Discord stream open and reconnects to the upstream source on drop.
 func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *streamer.Playback, request Request, headers map[string]string) error {
 
 	url := request.InitialURL
 	attempt := 0
+	consecutiveFailures := 0
 
 	for {
 
@@ -740,31 +830,31 @@ func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *stre
 
 			log.Printf(`[stream] live reconnect %d for "%s"`, attempt, request.Caption)
 
-			if request.ResolveURL != nil {
+			url, headers = refreshLiveUpstream(ctx, request, url, headers)
 
-				if fresh, err := request.ResolveURL(); err == nil && fresh != "" {
-					url = fresh
-				} else if err != nil {
-					log.Printf(`[stream] live URL re-resolve failed for "%s": %v`, request.Caption, err)
+			if url == "" {
+				log.Printf(`[stream] live reconnect for "%s" has no URL; retrying upstream resolve`, request.Caption)
+				consecutiveFailures++
+				attempt++
+
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(liveReconnectDelay(consecutiveFailures)):
 				}
 
-			}
-
-			if request.ResolveHeaders != nil {
-
-				if fresh := request.ResolveHeaders(); len(fresh) > 0 {
-					headers = fresh
-				}
-
+				continue
 			}
 
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(liveReconnectDelay):
+			case <-time.After(liveReconnectDelay(consecutiveFailures)):
 			}
 
 		}
+
+		segmentStart := time.Now()
 
 		playErr, transErr := p.runSegment(ctx, session, playback, transcode.Request{
 			InputURL: url,
@@ -777,7 +867,9 @@ func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *stre
 			return ctx.Err()
 		}
 
-		if playErr == nil && transErr == nil {
+		cleanEnd := playErr == nil && transErr == nil
+
+		if cleanEnd {
 			log.Printf(`[stream] live source ended for "%s", reconnecting`, request.Caption)
 		} else {
 
@@ -790,6 +882,8 @@ func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *stre
 			log.Printf(`[stream] live stream "%s" dropped: %v`, request.Caption, err)
 
 		}
+
+		consecutiveFailures = liveFailureCountAfterSegment(consecutiveFailures, time.Since(segmentStart), cleanEnd)
 
 		attempt++
 

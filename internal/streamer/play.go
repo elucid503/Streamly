@@ -74,9 +74,10 @@ type mediaSender struct {
 	pauseMu    sync.Mutex
 	pauseEpoch uint64
 
-	rtpMu      sync.Mutex
-	lastRTPAt  time.Time // When the RTP timeline last advanced (send, drop, or pause shift).
-	gapPending bool      // The next send must first cover the dead air since lastRTPAt.
+	rtpMu        sync.Mutex
+	lastRTPAt    time.Time // When the RTP timeline last advanced (send, drop, or pause shift).
+	gapPending   bool      // The next send must first cover the dead air since lastRTPAt.
+	spliceActive bool      // Audio may lag video after a segment splice; resync instead of dropping.
 }
 
 // beginSegment resets pacing for a new transcode session; the RTP gap applies at the first send.
@@ -89,8 +90,16 @@ func (s *mediaSender) beginSegment() {
 	s.clock.reset()
 
 	s.rtpMu.Lock()
+	isSplice := !s.lastRTPAt.IsZero()
 	s.gapPending = true
+	s.spliceActive = false
 	s.rtpMu.Unlock()
+
+	if isSplice {
+		if peer := s.activePeer; peer != nil && !peer.closed.Load() {
+			s.streamConn.setSpeaking(true)
+		}
+	}
 
 }
 
@@ -101,6 +110,11 @@ func (s *mediaSender) markRTP() {
 	s.lastRTPAt = time.Now()
 	s.rtpMu.Unlock()
 
+}
+
+// segmentSpliceNeedsAudioResync reports whether a new session should resync audio after video anchors first.
+func segmentSpliceNeedsAudioResync(pending bool, lastRTPAt time.Time) bool {
+	return pending && !lastRTPAt.IsZero()
 }
 
 // applySegmentGap advances the RTP timeline across dead air between sessions, like pause/resume.
@@ -115,11 +129,15 @@ func (s *mediaSender) applySegmentGap(peer *MediaPeer) {
 
 	s.rtpMu.Unlock()
 
-	if !pending || last.IsZero() {
+	if !segmentSpliceNeedsAudioResync(pending, last) {
 		return
 	}
 
 	gap := time.Since(last)
+
+	s.rtpMu.Lock()
+	s.spliceActive = true
+	s.rtpMu.Unlock()
 
 	if gap <= 0 {
 		return
@@ -259,6 +277,24 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 				s.markRTP()
 
 			} else {
+				s.rtpMu.Lock()
+				resync := s.spliceActive
+				if resync {
+					s.spliceActive = false
+				}
+				s.rtpMu.Unlock()
+
+				if resync {
+					if late := s.clock.lateness(packet.PTS); late > 0 {
+						s.clock.shift(late)
+					}
+
+					peer.sendAudio(packet.Data, duration)
+					s.markRTP()
+
+					continue
+				}
+
 				if late := s.clock.lateness(packet.PTS); late > audioCorrectionThreshold {
 					peer.advanceAudio(duration)
 					s.markRTP()
