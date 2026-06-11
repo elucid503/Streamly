@@ -24,6 +24,7 @@ type gateway struct {
 	heartbeatCancel context.CancelFunc
 	lastBeatAck     bool
 	identified      chan error
+	done            chan struct{}
 }
 
 func newGateway(client *Client) *gateway {
@@ -32,6 +33,7 @@ func newGateway(client *Client) *gateway {
 		client:      client,
 		identified:  make(chan error, 1),
 		lastBeatAck: true,
+		done:        make(chan struct{}),
 	}
 
 }
@@ -97,7 +99,10 @@ func (g *gateway) heartbeatPayload() any {
 
 func (g *gateway) readLoop(ctx context.Context) {
 
-	defer g.close()
+	defer func() {
+		g.close()
+		close(g.done)
+	}()
 
 	for {
 
@@ -257,6 +262,15 @@ func (g *gateway) signalReady(err error) {
 	case g.identified <- err:
 	default:
 	}
+
+}
+
+func (g *gateway) resumeState() (sessionID string, sequence int, hasSequence bool) {
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	return g.sessionID, g.sequence, g.hasSequence
 
 }
 

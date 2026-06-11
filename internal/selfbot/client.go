@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 )
 
 // RawEvent is a gateway dispatch forwarded to the streamer.
@@ -52,7 +53,13 @@ func (c *Client) Login(ctx context.Context) error {
 
 	c.gateway = newGateway(c)
 
-	return c.gateway.connect(ctx)
+	if err := c.gateway.connect(ctx); err != nil {
+		return err
+	}
+
+	go c.maintainGateway(ctx)
+
+	return nil
 
 }
 
@@ -85,11 +92,76 @@ func (c *Client) Events() <-chan RawEvent {
 // Send broadcasts a gateway opcode to Discord.
 func (c *Client) Send(op int, data any) error {
 
-	if c.gateway == nil {
+	c.mu.RLock()
+	gateway := c.gateway
+	c.mu.RUnlock()
+
+	if gateway == nil {
 		return fmt.Errorf("gateway not connected")
 	}
 
-	return c.gateway.send(op, data)
+	return gateway.send(op, data)
+
+}
+
+func (c *Client) maintainGateway(ctx context.Context) {
+
+	backoff := time.Second
+	const maxBackoff = 60 * time.Second
+
+	for {
+
+		c.mu.RLock()
+		current := c.gateway
+		c.mu.RUnlock()
+
+		if current == nil {
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-current.done:
+		}
+
+		sessionID, sequence, hasSequence := current.resumeState()
+
+		for {
+
+			log.Printf("[selfbot] gateway reconnecting")
+
+			time.Sleep(backoff)
+
+			if ctx.Err() != nil {
+				return
+			}
+
+			next := newGateway(c)
+
+			if sessionID != "" {
+				next.sessionID = sessionID
+				next.sequence = sequence
+				next.hasSequence = hasSequence
+			}
+
+			c.mu.Lock()
+			c.gateway = next
+			c.mu.Unlock()
+
+			if err := next.connect(ctx); err != nil {
+				log.Printf("[selfbot] gateway reconnect failed: %v", err)
+				backoff = min(backoff*2, maxBackoff)
+				continue
+			}
+
+			backoff = time.Second
+
+			break
+
+		}
+
+	}
 
 }
 

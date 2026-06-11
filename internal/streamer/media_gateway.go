@@ -127,9 +127,16 @@ func (g *mediaGateway) setDaveChannelID(channelID godave.ChannelID) {
 func (g *mediaGateway) setSession(sessionID string) {
 
 	g.mu.Lock()
+	changed := g.hasSession && g.sessionID != sessionID
 	g.sessionID = sessionID
 	g.hasSession = true
+	conn := g.conn
 	g.mu.Unlock()
+
+	if changed && conn != nil {
+		_ = conn.Close()
+		return
+	}
 
 	g.tryConnect()
 
@@ -138,10 +145,17 @@ func (g *mediaGateway) setSession(sessionID string) {
 func (g *mediaGateway) setTokens(server, token string) {
 
 	g.mu.Lock()
+	changed := g.hasToken && (g.server != server || g.token != token)
 	g.server = server
 	g.token = token
 	g.hasToken = true
+	conn := g.conn
 	g.mu.Unlock()
+
+	if changed && conn != nil {
+		_ = conn.Close()
+		return
+	}
 
 	g.tryConnect()
 

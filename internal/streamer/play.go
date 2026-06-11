@@ -134,6 +134,10 @@ func (s *mediaSender) applySegmentGap(peer *MediaPeer) {
 
 func (s *mediaSender) resolvePeer(ctx context.Context) (*MediaPeer, error) {
 
+	if s.activePeer != nil && s.activePeer.closed.Load() {
+		s.activePeer = nil
+	}
+
 	peer := s.streamConn.peer()
 
 	if peer == nil || peer.closed.Load() {
