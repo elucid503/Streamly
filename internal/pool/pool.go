@@ -46,8 +46,9 @@ type Request struct {
 	ResolveURL   source.UrlResolver
 	QualityURL   QualityResolver // Optional Febbox quality fallbacks when transcode fails.
 	QualityLabel string
-	Headers      map[string]string // HTTP headers for HLS/direct input; defaults to Febbox when nil.
-	Live         bool              // Live streams cannot be paused and re-resolve on expiry.
+	Headers         map[string]string // HTTP headers for HLS/direct input; defaults to Febbox when nil.
+	ResolveHeaders  func() map[string]string // Optional live-TV header refresh on reconnect.
+	Live            bool // Live streams cannot be paused and re-resolve on expiry.
 	OnClose      func(CloseReason)
 }
 
@@ -749,6 +750,14 @@ func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *stre
 					url = fresh
 				} else if err != nil {
 					log.Printf(`[stream] live URL re-resolve failed for "%s": %v`, request.Caption, err)
+				}
+
+			}
+
+			if request.ResolveHeaders != nil {
+
+				if fresh := request.ResolveHeaders(); len(fresh) > 0 {
+					headers = fresh
 				}
 
 			}

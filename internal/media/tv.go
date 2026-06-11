@@ -127,7 +127,20 @@ func TVAutocompleteLabel(channel tvapi.Channel) string {
 // TVStreamURL resolves a fresh HLS playlist URL for a live channel.
 func (r *Resolver) TVStreamURL(daddyID string) (string, error) {
 
-	return r.tv.ResolveHLS(daddyID)
+	stream, err := r.tv.ResolveStream(daddyID)
+
+	if err != nil {
+		return "", err
+	}
+
+	return stream.URL, nil
+
+}
+
+// TVStreamEndpoint resolves a live channel URL and the Referer it expects.
+func (r *Resolver) TVStreamEndpoint(daddyID string) (tvapi.ResolvedStream, error) {
+
+	return r.tv.ResolveStream(daddyID)
 
 }
 

@@ -94,25 +94,48 @@ func (c *TVClient) ListChannels() (*ChannelCatalog, error) {
 
 }
 
-// ResolveHLS turns a daddyId (e.g. "44") into a full proxied m3u8 URL.
-func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
+// ResolveStream turns a daddyId into a direct CDN playlist URL when possible.
+func (c *TVClient) ResolveStream(daddyID string) (ResolvedStream, error) {
 
 	daddyID = strings.TrimSpace(daddyID)
 
 	if daddyID == "" {
-		return "", fmt.Errorf("daddyId is required")
+		return ResolvedStream{}, fmt.Errorf("daddyId is required")
 	}
 
-	resolveURL, referer, err := c.resolveEndpoint(daddyID)
+	if stream, err := c.resolveDLHD(daddyID); err == nil && stream.URL != "" {
+		return stream, nil
+	}
+
+	return c.resolveTV247(daddyID)
+
+}
+
+// ResolveHLS turns a daddyId (e.g. "44") into a full proxied m3u8 URL.
+func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
+
+	stream, err := c.ResolveStream(daddyID)
 
 	if err != nil {
 		return "", err
 	}
 
+	return stream.URL, nil
+
+}
+
+func (c *TVClient) resolveTV247(daddyID string) (ResolvedStream, error) {
+
+	resolveURL, referer, err := c.resolveEndpoint(daddyID)
+
+	if err != nil {
+		return ResolvedStream{}, err
+	}
+
 	response, err := c.get(resolveURL, referer)
 
 	if err != nil {
-		return "", fmt.Errorf("resolve stream: %w", err)
+		return ResolvedStream{}, fmt.Errorf("resolve stream: %w", err)
 	}
 
 	defer response.Body.Close()
@@ -120,7 +143,7 @@ func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
 	body, err := io.ReadAll(response.Body)
 
 	if err != nil {
-		return "", fmt.Errorf("read resolve response: %w", err)
+		return ResolvedStream{}, fmt.Errorf("read resolve response: %w", err)
 	}
 
 	if response.StatusCode != http.StatusOK {
@@ -131,18 +154,18 @@ func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
 			msg = response.Status
 		}
 
-		return "", fmt.Errorf("resolve stream: status %d: %s", response.StatusCode, msg)
+		return ResolvedStream{}, fmt.Errorf("resolve stream: status %d: %s", response.StatusCode, msg)
 
 	}
 
 	streamURL, err := parseResolveResponse(body)
 
 	if err != nil {
-		return "", err
+		return ResolvedStream{}, err
 	}
 
 	if streamURL == "" {
-		return "", fmt.Errorf("resolve failed: empty stream path")
+		return ResolvedStream{}, fmt.Errorf("resolve failed: empty stream path")
 	}
 
 	if !strings.HasPrefix(streamURL, "http://") && !strings.HasPrefix(streamURL, "https://") {
@@ -155,7 +178,10 @@ func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
 
 	}
 
-	return streamURL, nil
+	return ResolvedStream{
+		URL:     streamURL,
+		Referer: referer,
+	}, nil
 
 }
 

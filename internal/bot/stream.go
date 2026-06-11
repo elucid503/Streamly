@@ -442,9 +442,9 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 		return
 	}
 
-	url, err := b.Resolver.TVStreamURL(channel.DaddyID)
+	endpoint, err := b.Resolver.TVStreamEndpoint(channel.DaddyID)
 
-	if err != nil || url == "" {
+	if err != nil || endpoint.URL == "" {
 		b.Pool.Release(session)
 		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("No live source was available for that channel.")})
 		return
@@ -465,16 +465,31 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 
 	embed := liveStreamingEmbed(details, channel, voice.ID)
 
+	resolveLive := func() (tvapi.ResolvedStream, error) {
+		return b.Resolver.TVStreamEndpoint(streamMedia[session.ID].DaddyID)
+	}
+
 	err = b.Pool.Play(context.Background(), session, pool.Request{
 		GuildID:      voice.GuildID,
 		ChannelID:    voice.ID,
 		Caption:      caption,
-		InitialURL:   url,
+		InitialURL:   endpoint.URL,
 		QualityLabel: "Live",
-		Headers:      config.TVStreamHeaders(),
+		Headers:      config.TVStreamHeadersForReferer(endpoint.Referer),
 		Live:         true,
 		ResolveURL: func() (string, error) {
-			return b.Resolver.TVStreamURL(streamMedia[session.ID].DaddyID)
+			stream, err := resolveLive()
+			if err != nil {
+				return "", err
+			}
+			return stream.URL, nil
+		},
+		ResolveHeaders: func() map[string]string {
+			stream, err := resolveLive()
+			if err != nil || stream.Referer == "" {
+				return nil
+			}
+			return config.TVStreamHeadersForReferer(stream.Referer)
 		},
 		OnClose: func(reason pool.CloseReason) {
 			delete(streamMedia, session.ID)

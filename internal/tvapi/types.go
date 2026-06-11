@@ -54,6 +54,12 @@ type TV247ResolveResult struct {
 	Error string `json:"error"`
 }
 
+// ResolvedStream is a live TV playlist URL and the Referer it expects.
+type ResolvedStream struct {
+	URL     string
+	Referer string
+}
+
 // StreamInfo pairs a channel with its resolved HLS playlist URL.
 type StreamInfo struct {
 	Channel Channel

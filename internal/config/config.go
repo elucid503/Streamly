@@ -138,10 +138,23 @@ func TVStreamReferer() string {
 // TVStreamHeaders presents a browser tab for proxied live TV HLS playlists.
 func TVStreamHeaders() map[string]string {
 
+	return TVStreamHeadersForReferer(TVStreamReferer())
+
+}
+
+// TVStreamHeadersForReferer builds playback headers for a resolved live TV source.
+func TVStreamHeadersForReferer(referer string) map[string]string {
+
+	referer = strings.TrimSpace(referer)
+
+	if referer == "" {
+		referer = TVStreamReferer()
+	}
+
 	return map[string]string{
 		"User-Agent":      browserUA,
 		"Accept-Language": "en-US,en;q=0.9",
-		"Referer":         TVStreamReferer(),
+		"Referer":         referer,
 	}
 
 }
