@@ -42,7 +42,7 @@ typedef struct {
     const char *headers;         // HTTP headers for URL input, formatted as CRLF-separated lines.
 
     int64_t start_ms;           // Initial playback position; 0 plays from the beginning.
-    bool live;                  // Live HLS input; uses longer network timeouts.
+    bool live;                  // Live HLS input; shorter network timeouts and fresh HTTP connections.
 
     streamly_emit_cb emit;      // Receives each encoded H264/Opus packet.
     streamly_meta_cb meta_cb;   // Receives the container duration after probing; may be NULL.

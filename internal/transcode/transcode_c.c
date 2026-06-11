@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <pthread.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,10 +34,46 @@
 #define VIDEO_SCALE_CHAIN "scale=%d:%d:flags=lanczos,format=yuv420p,fps=%d"
 #define VIDEO_SCALE_CHAIN_LIVE "scale=%d:%d:flags=fast_bilinear,format=yuv420p,fps=%d"
 
-// Suppress libav warnings globally before any goroutine can call into libav.
+static bool transient_upstream_tls_log(const char *msg) {
+
+    return strstr(msg, "Error in the pull function") != NULL ||
+           strstr(msg, "IO error: Connection timed out") != NULL ||
+           strstr(msg, "Error decoding the received TLS packet") != NULL;
+
+}
+
+static void streamly_av_log(void *ptr, int level, const char *fmt, va_list vl) {
+
+    if (level > av_log_get_level()) {
+        return;
+    }
+
+    char msg[1024];
+    int print_prefix = 1;
+
+    av_log_format_line(ptr, level, fmt, vl, msg, sizeof(msg), &print_prefix);
+
+    if (transient_upstream_tls_log(msg)) {
+        fprintf(stdout, "[transcode] upstream network hiccup: %s", msg);
+    } else {
+        fprintf(stdout, "[transcode] libav: %s", msg);
+    }
+
+    size_t len = strlen(msg);
+
+    if (len == 0 || msg[len - 1] != '\n') {
+        fputc('\n', stdout);
+    }
+
+    fflush(stdout);
+
+}
+
+// Route libav logs to stdout so transient upstream TLS noise stays out of pm2's error log.
 // The per-session av_log_set_level in transcode_run is a belt-and-suspenders fallback.
 __attribute__((constructor)) static void init_av_log(void) {
     av_log_set_level(AV_LOG_ERROR);
+    av_log_set_callback(streamly_av_log);
 }
 
 typedef struct PacketNode {
@@ -245,7 +282,7 @@ static int open_input_cb(const transcode_params_t *params, AVFormatContext **fmt
     return 0;
 }
 
-static int open_input_url_once(const char *url, const char *headers, volatile bool *abort_flag,
+static int open_input_url_once(const char *url, const char *headers, bool live, volatile bool *abort_flag,
                                InterruptState *interrupt, AVFormatContext **fmt_out) {
 
     AVFormatContext *fmt = avformat_alloc_context();
@@ -265,8 +302,15 @@ static int open_input_url_once(const char *url, const char *headers, volatile bo
     av_dict_set(&opts, "reconnect_streamed", "1", 0);
     av_dict_set(&opts, "reconnect_on_network_error", "1", 0);
     av_dict_set(&opts, "reconnect_delay_max", "8", 0);
-    av_dict_set(&opts, "rw_timeout", "30000000", 0);
-    av_dict_set(&opts, "timeout", "30000000", 0);
+
+    if (live) {
+        av_dict_set(&opts, "rw_timeout", "10000000", 0);
+        av_dict_set(&opts, "timeout", "10000000", 0);
+        av_dict_set(&opts, "http_persistent", "0", 0);
+    } else {
+        av_dict_set(&opts, "rw_timeout", "30000000", 0);
+        av_dict_set(&opts, "timeout", "30000000", 0);
+    }
 
     if (headers && headers[0] != '\0') {
         av_dict_set(&opts, "headers", headers, 0);
@@ -291,7 +335,7 @@ static int open_input_url_once(const char *url, const char *headers, volatile bo
     return 0;
 }
 
-static int open_input_url(const char *url, const char *headers, volatile bool *abort_flag,
+static int open_input_url(const char *url, const char *headers, bool live, volatile bool *abort_flag,
                           InterruptState *interrupt, AVFormatContext **fmt_out) {
 
     if (!url || url[0] == '\0') {
@@ -310,7 +354,7 @@ static int open_input_url(const char *url, const char *headers, volatile bool *a
             av_usleep((unsigned)INPUT_OPEN_RETRY_BASE_US * (unsigned)attempt);
         }
 
-        int ret = open_input_url_once(url, headers, abort_flag, interrupt, fmt_out);
+        int ret = open_input_url_once(url, headers, live, abort_flag, interrupt, fmt_out);
 
         if (ret >= 0) {
             return 0;
@@ -1293,7 +1337,7 @@ static int transcode_run(struct transcode_handle *handle) {
     bool have_audio = false;
 
     if (params.input_url && params.input_url[0] != '\0') {
-        ret = open_input_url(params.input_url, params.headers, params.abort_flag, &handle->interrupt, &video.fmt);
+        ret = open_input_url(params.input_url, params.headers, params.live, params.abort_flag, &handle->interrupt, &video.fmt);
     } else if (params.read_cb) {
         ret = open_input_cb(&params, &video.fmt, &video.avio);
     } else {
