@@ -72,10 +72,8 @@ func (c *TVClient) ResolveStream(daddyID string) (ResolvedStream, error) {
 		return ResolvedStream{}, fmt.Errorf("daddyId is required")
 	}
 
-	if stream, err := c.resolveTV247(daddyID); err == nil && stream.URL != "" {
-		return stream, nil
-	}
-
+	// DLHD serves direct CDN playlists. The tv247/cfbu247 proxy is blocked by
+	// Cloudflare's streaming ToS, so do not fall back to it.
 	return c.resolveDLHD(daddyID)
 
 }
