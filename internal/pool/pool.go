@@ -876,6 +876,20 @@ func refreshLiveUpstream(ctx context.Context, request Request, currentURL string
 
 }
 
+// prepareLiveHLSInput wraps obfuscated live playlists in a localhost TS-only relay for libav.
+func prepareLiveHLSInput(ctx context.Context, upstream string, headers map[string]string) (playbackURL string, playbackHeaders map[string]string, stop func()) {
+
+	relay, err := source.StartLiveHLSRelay(ctx, upstream, headers)
+
+	if err != nil {
+		log.Printf("[stream] live hls relay unavailable, using upstream: %v", err)
+		return upstream, headers, func() {}
+	}
+
+	return relay.URL(), nil, relay.Close
+
+}
+
 // playLiveHLS keeps the Discord stream open and reconnects to the upstream source on drop.
 func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *streamer.Playback, request Request, headers map[string]string) error {
 
@@ -927,9 +941,12 @@ func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *stre
 			session.pendingSegmentCTAs = []SegmentCTA{{Text: "The live stream has restarted", DurationMs: liveCTADurationMs}}
 		}
 
+		playbackURL, playbackHeaders, stopRelay := prepareLiveHLSInput(ctx, url, headers)
+		defer stopRelay()
+
 		treq := transcode.Request{
-			InputURL: url,
-			Headers:  headers,
+			InputURL: playbackURL,
+			Headers:  playbackHeaders,
 			Caption:  request.Caption,
 			Live:     true,
 		}
