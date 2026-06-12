@@ -72,11 +72,11 @@ func (c *TVClient) ResolveStream(daddyID string) (ResolvedStream, error) {
 		return ResolvedStream{}, fmt.Errorf("daddyId is required")
 	}
 
-	if stream, err := c.resolveDLHD(daddyID); err == nil && stream.URL != "" {
+	if stream, err := c.resolveTV247(daddyID); err == nil && stream.URL != "" {
 		return stream, nil
 	}
 
-	return c.resolveTV247(daddyID)
+	return c.resolveDLHD(daddyID)
 
 }
 

@@ -25,10 +25,10 @@ func TestResolveDLHDABC(t *testing.T) {
 
 	client := NewTVClient(TVOptions{})
 
-	stream, err := client.ResolveStream("51")
+	stream, err := client.resolveDLHD("51")
 
 	if err != nil {
-		t.Fatalf("resolve stream: %v", err)
+		t.Fatalf("resolve dlhd: %v", err)
 	}
 
 	if !strings.Contains(stream.URL, ".m3u8") {
@@ -41,6 +41,26 @@ func TestResolveDLHDABC(t *testing.T) {
 
 	if stream.Referer == "" {
 		t.Fatal("expected embed referer")
+	}
+
+}
+
+func TestResolveStreamPrefersTV247(t *testing.T) {
+
+	client := NewTVClient(TVOptions{})
+
+	stream, err := client.ResolveStream("51")
+
+	if err != nil {
+		t.Fatalf("resolve stream: %v", err)
+	}
+
+	if !strings.Contains(stream.URL, "/api/proxy/playlist") && !strings.Contains(stream.URL, "/papi/tv/playlist/") {
+		t.Fatalf("expected proxied tv247 url, got %q", stream.URL)
+	}
+
+	if stream.Referer == "" {
+		t.Fatal("expected tv247 referer")
 	}
 
 }
