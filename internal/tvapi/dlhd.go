@@ -17,7 +17,7 @@ var (
 	atobSourcePattern = regexp.MustCompile(`source:\s*window\.atob\('([^']+)'\)`)
 )
 
-// resolveDLHD fetches the direct CDN playlist from the DLHD embed page.
+// resolveDLHD fetches the direct CDN playlist and embed Referer from the DLHD stream page.
 func (c *TVClient) resolveDLHD(daddyID string) (ResolvedStream, error) {
 
 	base := strings.TrimRight(dlhdBaseURL(), "/")

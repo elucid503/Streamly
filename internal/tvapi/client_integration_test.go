@@ -87,26 +87,6 @@ func TestResolveHLSIntegration(t *testing.T) {
 
 }
 
-func TestResolveLegacyEndpoint(t *testing.T) {
-
-	client := NewTVClient(TVOptions{})
-
-	stream, err := client.resolveLegacy("609")
-
-	if err != nil {
-		t.Fatalf("resolveLegacy: %v", err)
-	}
-
-	if !strings.Contains(stream.URL, "/papi/tv/playlist/") {
-		t.Fatalf("expected proxied playlist url, got %q", stream.URL)
-	}
-
-	if !strings.HasPrefix(stream.Referer, defaultBaseURL) {
-		t.Fatalf("expected %s referer, got %q", defaultBaseURL, stream.Referer)
-	}
-
-}
-
 func fetchIntegrationPlaylist(rawURL, referer string) (string, error) {
 
 	client := &http.Client{Timeout: 30 * time.Second}

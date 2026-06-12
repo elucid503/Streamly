@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -71,30 +70,6 @@ func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
 	}
 
 	return stream.URL, nil
-
-}
-
-func joinStreamAPI(streamAPI, daddyID string) string {
-
-	streamAPI = strings.TrimSpace(streamAPI)
-
-	if strings.Contains(streamAPI, "?") {
-		return streamAPI + url.QueryEscape(daddyID)
-	}
-
-	return strings.TrimRight(streamAPI, "/") + "/" + url.PathEscape(daddyID)
-
-}
-
-func streamAPIOrigin(streamAPI string) string {
-
-	parsed, err := url.Parse(strings.TrimSpace(streamAPI))
-
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return "https://cfbu247.sbs"
-	}
-
-	return parsed.Scheme + "://" + parsed.Host
 
 }
 

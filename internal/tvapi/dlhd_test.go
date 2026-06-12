@@ -21,7 +21,7 @@ func TestExtractAtobSource(t *testing.T) {
 
 }
 
-func TestResolveDLHDFallback(t *testing.T) {
+func TestResolveDLHD(t *testing.T) {
 
 	client := NewTVClient(TVOptions{})
 
@@ -41,7 +41,7 @@ func TestResolveDLHDFallback(t *testing.T) {
 
 }
 
-func TestResolveStreamPrefersLegacyPlaylist(t *testing.T) {
+func TestResolveStreamUsesDLHD(t *testing.T) {
 
 	client := NewTVClient(TVOptions{})
 
@@ -51,12 +51,12 @@ func TestResolveStreamPrefersLegacyPlaylist(t *testing.T) {
 		t.Fatalf("resolve stream: %v", err)
 	}
 
-	if !strings.Contains(stream.URL, "/papi/tv/playlist/") {
-		t.Fatalf("expected proxied legacy playlist, got %q", stream.URL)
+	if !strings.Contains(stream.URL, ".m3u8") {
+		t.Fatalf("expected direct cdn playlist, got %q", stream.URL)
 	}
 
-	if !strings.HasPrefix(stream.Referer, "https://dami-tv.pro") {
-		t.Fatalf("expected dami-tv referer, got %q", stream.Referer)
+	if stream.Referer == "" {
+		t.Fatal("expected embed referer")
 	}
 
 }
