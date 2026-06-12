@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -105,31 +106,27 @@ func TVBaseURL() string {
 
 }
 
-// TVStreamAPI returns the resolve endpoint prefix for live TV HLS playlists.
+// TVStreamAPI returns an optional resolve endpoint override for live TV playlists.
 func TVStreamAPI() string {
 
-	api := strings.TrimSpace(os.Getenv("TV_STREAM_API"))
-
-	if api == "" {
-		return "https://chat.cfbu247.sbs/api/resolve-dlstream/"
-	}
-
-	return api
+	return strings.TrimSpace(os.Getenv("TV_STREAM_API"))
 
 }
 
 // TVStreamReferer returns the origin sent as Referer for proxied live TV playlists.
 func TVStreamReferer() string {
 
-	api := TVStreamAPI()
+	if api := TVStreamAPI(); api != "" {
 
-	parsed, err := url.Parse(api)
+		parsed, err := url.Parse(api)
 
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return "https://cfbu247.sbs/"
+		if err == nil && parsed.Scheme != "" && parsed.Host != "" {
+			return parsed.Scheme + "://" + parsed.Host + "/"
+		}
+
 	}
 
-	return parsed.Scheme + "://" + parsed.Host + "/"
+	return TVBaseURL() + "/"
 
 }
 
@@ -160,12 +157,34 @@ func TVStreamHeadersForReferer(referer string) map[string]string {
 // loadDotEnv reads a .env file into the process environment before config init.
 func loadDotEnv() {
 
-	if _, err := os.Stat(".env"); err != nil {
+	dir, err := os.Getwd()
+
+	if err != nil {
 		return
 	}
 
-	if err := godotenv.Load(".env"); err != nil {
-		log.Printf("[config] could not load .env: %v", err)
+	for {
+
+		path := filepath.Join(dir, ".env")
+
+		if _, err := os.Stat(path); err == nil {
+
+			if err := godotenv.Load(path); err != nil {
+				log.Printf("[config] could not load %s: %v", path, err)
+			}
+
+			return
+
+		}
+
+		parent := filepath.Dir(dir)
+
+		if parent == dir {
+			return
+		}
+
+		dir = parent
+
 	}
 
 }

@@ -3,7 +3,6 @@ package tvapi
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -13,10 +12,9 @@ import (
 )
 
 const (
-	defaultBaseURL     = "https://dami-tv.pro"
-	defaultStreamAPI   = "https://chat.cfbu247.sbs/api/resolve-dlstream/"
-	channelsPath       = "/data/tv-channels.json?v=302"
-	legacyResolvePath  = "/papi/tv/resolve/"
+	defaultBaseURL    = "https://dami-tv.pro"
+	channelsPath      = "/data/tv-channels.json?v=302"
+	legacyResolvePath = "/papi/tv/resolve/"
 
 	catalogTTL = 15 * time.Minute // How long the tv-channels.json catalog stays cached.
 )
@@ -26,7 +24,7 @@ type TVOptions struct {
 	BaseURL string // API base URL. Defaults to TV_BASE_URL env or dami-tv.pro.
 }
 
-// TVClient fetches channel listings and resolves HLS streams from the tv247 backend.
+// TVClient fetches channel listings and resolves HLS playlists for live TV channels.
 type TVClient struct {
 	baseURL string
 	client  *http.Client
@@ -63,22 +61,7 @@ func NewTVClient(options TVOptions) *TVClient {
 
 }
 
-// ResolveStream turns a daddyId into a direct CDN playlist URL when possible.
-func (c *TVClient) ResolveStream(daddyID string) (ResolvedStream, error) {
-
-	daddyID = strings.TrimSpace(daddyID)
-
-	if daddyID == "" {
-		return ResolvedStream{}, fmt.Errorf("daddyId is required")
-	}
-
-	// DLHD serves direct CDN playlists. The tv247/cfbu247 proxy is blocked by
-	// Cloudflare's streaming ToS, so do not fall back to it.
-	return c.resolveDLHD(daddyID)
-
-}
-
-// ResolveHLS turns a daddyId (e.g. "44") into a full proxied m3u8 URL.
+// ResolveHLS turns a daddyId (e.g. "44") into a resolved HLS playlist URL.
 func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
 
 	stream, err := c.ResolveStream(daddyID)
@@ -88,101 +71,6 @@ func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
 	}
 
 	return stream.URL, nil
-
-}
-
-func (c *TVClient) resolveTV247(daddyID string) (ResolvedStream, error) {
-
-	resolveURL, referer, err := c.resolveEndpoint(daddyID)
-
-	if err != nil {
-		return ResolvedStream{}, err
-	}
-
-	response, err := c.get(resolveURL, referer)
-
-	if err != nil {
-		return ResolvedStream{}, fmt.Errorf("resolve stream: %w", err)
-	}
-
-	defer response.Body.Close()
-
-	body, err := io.ReadAll(response.Body)
-
-	if err != nil {
-		return ResolvedStream{}, fmt.Errorf("read resolve response: %w", err)
-	}
-
-	if response.StatusCode != http.StatusOK {
-
-		msg := strings.TrimSpace(string(body))
-
-		if msg == "" {
-			msg = response.Status
-		}
-
-		return ResolvedStream{}, fmt.Errorf("resolve stream: status %d: %s", response.StatusCode, msg)
-
-	}
-
-	streamURL, err := parseResolveResponse(body)
-
-	if err != nil {
-		return ResolvedStream{}, err
-	}
-
-	if streamURL == "" {
-		return ResolvedStream{}, fmt.Errorf("resolve failed: empty stream path")
-	}
-
-	if !strings.HasPrefix(streamURL, "http://") && !strings.HasPrefix(streamURL, "https://") {
-
-		if !strings.HasPrefix(streamURL, "/") {
-			streamURL = "/" + streamURL
-		}
-
-		streamURL = c.baseURL + streamURL
-
-	}
-
-	return ResolvedStream{
-		URL:     streamURL,
-		Referer: referer,
-	}, nil
-
-}
-
-func (c *TVClient) resolveEndpoint(daddyID string) (resolveURL, referer string, err error) {
-
-	streamAPI := c.streamAPI()
-
-	if streamAPI != "" {
-
-		resolveURL = joinStreamAPI(streamAPI, daddyID)
-		referer = streamAPIOrigin(streamAPI) + "/"
-
-		return resolveURL, referer, nil
-
-	}
-
-	resolveURL = c.baseURL + legacyResolvePath + url.PathEscape(daddyID)
-	referer = c.baseURL + "/"
-
-	return resolveURL, referer, nil
-
-}
-
-func (c *TVClient) streamAPI() string {
-
-	if cached := c.cachedCatalog(); cached != nil && strings.TrimSpace(cached.StreamAPI) != "" {
-		return strings.TrimSpace(cached.StreamAPI)
-	}
-
-	if override := strings.TrimSpace(os.Getenv("TV_STREAM_API")); override != "" {
-		return override
-	}
-
-	return defaultStreamAPI
 
 }
 
@@ -301,7 +189,7 @@ func (c *TVClient) get(rawURL, referer string) (*http.Response, error) {
 	}
 
 	if referer == "" {
-		referer = streamAPIOrigin(c.streamAPI()) + "/"
+		referer = c.baseURL + "/"
 	}
 
 	request.Header.Set("User-Agent", tvBrowserUA)

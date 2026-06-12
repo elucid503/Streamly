@@ -21,26 +21,42 @@ func TestExtractAtobSource(t *testing.T) {
 
 }
 
-func TestResolveDLHDABC(t *testing.T) {
+func TestResolveDLHDFallback(t *testing.T) {
 
 	client := NewTVClient(TVOptions{})
 
-	stream, err := client.ResolveStream("51")
+	stream, err := client.resolveDLHD("51")
+
+	if err != nil {
+		t.Fatalf("resolve dlhd: %v", err)
+	}
+
+	if !isHLSPlaylistURL(stream.URL) {
+		t.Fatalf("expected hls playlist url, got %q", stream.URL)
+	}
+
+	if stream.Referer == "" {
+		t.Fatal("expected embed referer")
+	}
+
+}
+
+func TestResolveStreamPrefersLegacyPlaylist(t *testing.T) {
+
+	client := NewTVClient(TVOptions{})
+
+	stream, err := client.ResolveStream("44")
 
 	if err != nil {
 		t.Fatalf("resolve stream: %v", err)
 	}
 
-	if !strings.Contains(stream.URL, ".m3u8") {
-		t.Fatalf("expected m3u8 url, got %q", stream.URL)
+	if !strings.Contains(stream.URL, "/papi/tv/playlist/") {
+		t.Fatalf("expected proxied legacy playlist, got %q", stream.URL)
 	}
 
-	if strings.Contains(stream.URL, "cfbu247.sbs") || strings.Contains(stream.URL, "/api/proxy/playlist") {
-		t.Fatalf("expected direct cdn url, not cloudflare proxy: %q", stream.URL)
-	}
-
-	if stream.Referer == "" {
-		t.Fatal("expected embed referer")
+	if !strings.HasPrefix(stream.Referer, "https://dami-tv.pro") {
+		t.Fatalf("expected dami-tv referer, got %q", stream.Referer)
 	}
 
 }
