@@ -76,9 +76,9 @@ type pauseFrameEncoder interface {
 
 // Session is a running transcode: encoded video/audio feeds, completion state, and pause control.
 type Session struct {
-	Video  <-chan Packet
-	Audio  <-chan Packet
-	Done   <-chan error
+	Video <-chan Packet
+	Audio <-chan Packet
+	Done  <-chan error
 	pause *pauseState
 
 	card    *PauseCard
@@ -136,6 +136,25 @@ func (s *Session) PauseFrame(targetPTSMs int64) ([]byte, bool) {
 	if !paused {
 		return nil, false
 	}
+
+	return s.frame(targetPTSMs, epoch)
+
+}
+
+// LoadingFrame returns the session card as an IDR over the latest decoded frame.
+// It is used by live streams while the upstream source is starved, without entering
+// the user-visible paused state.
+func (s *Session) LoadingFrame(targetPTSMs int64) ([]byte, bool) {
+
+	if s.card == nil || s.encoder == nil {
+		return nil, false
+	}
+
+	return s.frame(targetPTSMs, 0)
+
+}
+
+func (s *Session) frame(targetPTSMs int64, epoch uint64) ([]byte, bool) {
 
 	s.frameMu.Lock()
 	defer s.frameMu.Unlock()

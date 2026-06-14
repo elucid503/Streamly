@@ -11,7 +11,7 @@ import (
 	"streamly/internal/transcode"
 )
 
-const audioCorrectionThreshold = 350 * time.Millisecond
+const bufferHoldThreshold = 350 * time.Millisecond
 
 // pauseFrameInterval paces the re-sent pause-card IDR: frequent enough that clients
 // never enter the buffering state, sparse enough to stay well under the video bitrate.
@@ -72,20 +72,20 @@ func (p *Playback) Close() {
 
 // mediaSender ships the transcode's audio and video, pacing both against one shared clock.
 type mediaSender struct {
-	streamConn *StreamConnection
-	activePeer *MediaPeer
-	clock      mediaClock
-	pauseMu    sync.Mutex
-	pauseEpoch uint64
-	pauseSent  time.Duration // Video RTP advanced by pause-card sends, not yet matched on audio.
-	dropToIDR  bool          // Drop video until the next in-stream IDR so refs survive the pause card.
+	streamConn  *StreamConnection
+	activePeer  *MediaPeer
+	clock       mediaClock
+	pauseMu     sync.Mutex
+	pauseEpoch  uint64
+	pauseSent   time.Duration // Video RTP advanced by pause-card sends, not yet matched on audio.
+	loadingSent time.Duration // Video RTP advanced by live loading-card sends.
+	dropToIDR   bool          // Drop video until the next in-stream IDR so refs survive the pause card.
 
 	lastVideoPTSMs int64 // PTS of the last real video packet sent; freezes the pause card there.
 
-	rtpMu        sync.Mutex
-	lastRTPAt    time.Time // When the RTP timeline last advanced (send, drop, or pause shift).
-	gapPending   bool      // The next send must first cover the dead air since lastRTPAt.
-	spliceActive bool      // Audio may lag video after a segment splice; resync instead of dropping.
+	rtpMu      sync.Mutex
+	lastRTPAt  time.Time // When the RTP timeline last advanced (send, drop, or pause shift).
+	gapPending bool      // The next send must first cover the dead air since lastRTPAt.
 }
 
 // beginSegment resets pacing for a new transcode session; the RTP gap applies at the first send.
@@ -103,7 +103,6 @@ func (s *mediaSender) beginSegment() {
 	s.rtpMu.Lock()
 	isSplice := !s.lastRTPAt.IsZero()
 	s.gapPending = true
-	s.spliceActive = false
 	s.rtpMu.Unlock()
 
 	if isSplice {
@@ -145,10 +144,6 @@ func (s *mediaSender) applySegmentGap(peer *MediaPeer) {
 	}
 
 	gap := time.Since(last)
-
-	s.rtpMu.Lock()
-	s.spliceActive = true
-	s.rtpMu.Unlock()
 
 	if gap <= 0 {
 		return
@@ -286,6 +281,49 @@ func (s *mediaSender) sendPauseFrame(ctx context.Context, ts *transcode.Session)
 
 }
 
+func (s *mediaSender) sendLoadingFrame(ctx context.Context, ts *transcode.Session) {
+
+	frame, ok := ts.LoadingFrame(s.lastVideoPTSMs)
+
+	if !ok {
+		return
+	}
+
+	peer, err := s.resolvePeer(ctx)
+
+	if err != nil {
+		return
+	}
+
+	s.applySegmentGap(peer)
+
+	peer.sendVideo(frame, pauseFrameInterval)
+	s.markRTP()
+
+	s.pauseMu.Lock()
+	s.loadingSent += pauseFrameInterval
+	s.dropToIDR = true
+	s.pauseMu.Unlock()
+
+}
+
+func (s *mediaSender) applyLoadingHold(peer *MediaPeer) {
+
+	s.pauseMu.Lock()
+	duration := s.loadingSent
+	s.loadingSent = 0
+	s.pauseMu.Unlock()
+
+	if duration <= 0 {
+		return
+	}
+
+	s.clock.shift(duration)
+	peer.advanceAudio(duration)
+	s.markRTP()
+
+}
+
 // consumeVideoDrop reports whether a video frame must be dropped because the decoder's
 // references were displaced by the pause card; the next in-stream IDR re-anchors cleanly.
 func (s *mediaSender) consumeVideoDrop(frame []byte) bool {
@@ -306,6 +344,34 @@ func (s *mediaSender) consumeVideoDrop(frame []byte) bool {
 
 }
 
+func (s *mediaSender) nextPacket(ctx context.Context, ts *transcode.Session, packets <-chan transcode.Packet, kind transcode.Kind) (transcode.Packet, bool, error) {
+
+	if kind != transcode.KindVideo || s.lastVideoPTSMs < 0 {
+		select {
+		case <-ctx.Done():
+			return transcode.Packet{}, false, ctx.Err()
+		case packet, ok := <-packets:
+			return packet, ok, nil
+		}
+	}
+
+	timer := time.NewTimer(bufferHoldThreshold)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return transcode.Packet{}, false, ctx.Err()
+		case packet, ok := <-packets:
+			return packet, ok, nil
+		case <-timer.C:
+			s.sendLoadingFrame(ctx, ts)
+			timer.Reset(pauseFrameInterval)
+		}
+	}
+
+}
+
 // pump sends one feed in order, pacing each packet against the shared clock and retrying on backpressure.
 func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <-chan transcode.Packet, kind transcode.Kind) error {
 
@@ -317,85 +383,63 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 
 		s.applyPauseEvent(ts)
 
-		select {
-		case <-ctx.Done():
+		packet, ok, err := s.nextPacket(ctx, ts, packets, kind)
+
+		if err != nil {
+			return err
+		}
+
+		if !ok {
+			return nil
+		}
+
+		if !s.holdWhilePaused(ctx, ts, kind) {
 			return ctx.Err()
+		}
 
-		case packet, ok := <-packets:
+		s.applyPauseEvent(ts)
 
-			if !ok {
-				return nil
-			}
+		if !s.clock.wait(ctx, packet.PTS, 0) {
+			return ctx.Err()
+		}
 
-			if !s.holdWhilePaused(ctx, ts, kind) {
-				return ctx.Err()
-			}
+		duration := packet.Duration
 
-			s.applyPauseEvent(ts)
+		if kind == transcode.KindVideo {
+			duration = frametime(kind)
+		} else if duration <= 0 {
+			duration = frametime(kind)
+		}
 
-			if !s.clock.wait(ctx, packet.PTS, 0) {
-				return ctx.Err()
-			}
+		peer, err := s.resolvePeer(ctx)
 
-			duration := packet.Duration
+		if err != nil {
+			return err
+		}
 
-			if kind == transcode.KindVideo {
-				duration = frametime(kind)
-			} else if duration <= 0 {
-				duration = frametime(kind)
-			}
+		s.applySegmentGap(peer)
+		s.applyLoadingHold(peer)
 
-			peer, err := s.resolvePeer(ctx)
+		if kind == transcode.KindVideo {
 
-			if err != nil {
-				return err
-			}
-
-			s.applySegmentGap(peer)
-
-			if kind == transcode.KindVideo {
-
-				if s.consumeVideoDrop(packet.Data) {
-					peer.advanceVideo(duration)
-					s.markRTP()
-
-					continue
-				}
-
-				peer.sendVideo(packet.Data, duration)
-				s.lastVideoPTSMs = packet.PTS.Milliseconds()
+			if s.consumeVideoDrop(packet.Data) {
+				peer.advanceVideo(duration)
 				s.markRTP()
 
-			} else {
-				s.rtpMu.Lock()
-				resync := s.spliceActive
-				if resync {
-					s.spliceActive = false
-				}
-				s.rtpMu.Unlock()
-
-				if resync {
-					if late := s.clock.lateness(packet.PTS); late > 0 {
-						s.clock.shift(late)
-					}
-
-					peer.sendAudio(packet.Data, duration)
-					s.markRTP()
-
-					continue
-				}
-
-				if late := s.clock.lateness(packet.PTS); late > audioCorrectionThreshold {
-					peer.advanceAudio(duration)
-					s.markRTP()
-
-					continue
-				}
-
-				peer.sendAudio(packet.Data, duration)
-				s.markRTP()
+				continue
 			}
 
+			peer.sendVideo(packet.Data, duration)
+			s.lastVideoPTSMs = packet.PTS.Milliseconds()
+			s.markRTP()
+
+		} else {
+			if late := s.clock.lateness(packet.PTS); late > bufferHoldThreshold {
+				s.clock.shift(late)
+			}
+
+			peer.sendAudio(packet.Data, duration)
+			s.markRTP()
 		}
 
 	}

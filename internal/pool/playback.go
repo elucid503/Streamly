@@ -13,6 +13,7 @@ import (
 const (
 	IntroSkipCTAText     = "Use /skip-intro to jump ahead"
 	PauseCTAText         = "Use /resume to resume playback."
+	LoadingCTAText       = "Loading live stream..."
 	liveCTADurationMs    = 8000
 	playbackPollInterval = 2 * time.Second
 	creditsCTAPrefix     = "Check #"
@@ -139,9 +140,24 @@ func (session *Session) enrichTranscodeRequest(treq *transcode.Request, offset t
 		treq.CTAFontPath = session.ctaFontPath
 	}
 
-	if !treq.Live {
+	if treq.Live {
+		treq.PauseCard = session.buildLoadingCard(treq.Caption)
+	} else {
 		treq.PauseCard = session.buildPauseCard(treq.Caption)
 	}
+
+}
+
+func (session *Session) buildLoadingCard(caption string) *transcode.PauseCard {
+
+	card := session.buildPauseCard(caption)
+	card.CTA = LoadingCTAText
+
+	if card.Title == "Paused" {
+		card.Title = "Loading"
+	}
+
+	return card
 
 }
 

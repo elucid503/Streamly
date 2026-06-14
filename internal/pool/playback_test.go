@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"streamly/internal/media"
+	"streamly/internal/transcode"
 )
 
 func TestWrapPauseBody(t *testing.T) {
@@ -80,6 +81,23 @@ func TestBuildPauseCard(t *testing.T) {
 
 	if empty.Title != "Paused" {
 		t.Fatalf("empty card must fall back to Paused, got %q", empty.Title)
+	}
+
+}
+
+func TestEnrichLiveTranscodeUsesLoadingCard(t *testing.T) {
+
+	session := &Session{ctaFontPath: "/tmp/font.ttf"}
+	treq := transcode.Request{Live: true, Caption: "Live Channel"}
+
+	session.enrichTranscodeRequest(&treq, 0)
+
+	if treq.PauseCard == nil {
+		t.Fatal("live transcode must carry a loading card")
+	}
+
+	if treq.PauseCard.CTA != LoadingCTAText || treq.PauseCard.Title != "Live Channel" {
+		t.Fatalf("unexpected loading card: %+v", treq.PauseCard)
 	}
 
 }
