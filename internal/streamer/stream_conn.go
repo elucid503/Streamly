@@ -1,11 +1,13 @@
 package streamer
 
-// StreamConnection is the Go Live voice-gateway session layered on a VoiceConnection.
 type StreamConnection struct {
-	voice       *VoiceConnection
+
+	voice *VoiceConnection
 	rtcServerID string
-	streamKey   string
-	gateway     *mediaGateway
+	streamKey string
+
+	gateway *mediaGateway
+
 }
 
 func newStreamConnection(voice *VoiceConnection, ready chan *MediaPeer) *StreamConnection {
@@ -17,6 +19,7 @@ func newStreamConnection(voice *VoiceConnection, ready chan *MediaPeer) *StreamC
 func (s *StreamConnection) setSession(sessionID string) {
 
 	if s.rtcServerID == "" {
+
 		return
 	}
 

@@ -6,6 +6,7 @@ import (
 
 // chromeCipherSuites mirrors discord.js-selfbot-v13's TLS fingerprint order.
 var chromeCipherSuites = []uint16{
+
 	tls.TLS_AES_128_GCM_SHA256,
 	tls.TLS_AES_256_GCM_SHA384,
 	tls.TLS_CHACHA20_POLY1305_SHA256,
@@ -26,7 +27,8 @@ var chromeCipherSuites = []uint16{
 func chromeTLSConfig() *tls.Config {
 
 	return &tls.Config{
-		MinVersion:   tls.VersionTLS12,
+
+		MinVersion: tls.VersionTLS12,
 		CipherSuites: chromeCipherSuites,
 	}
 

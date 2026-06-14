@@ -5,6 +5,7 @@ import "encoding/json"
 func parseAPIErrorBody(body string) apiErrorBody {
 
 	var parsed apiErrorBody
+
 	_ = json.Unmarshal([]byte(body), &parsed)
 
 	return parsed
@@ -14,11 +15,14 @@ func parseAPIErrorBody(body string) apiErrorBody {
 func parseMediaResponse(raw mediaResponseRaw) *MediaRecord {
 
 	record := &MediaRecord{
+
 		TMDBId: raw.TMDBId,
-		Type:   raw.Type,
+		Type: raw.Type,
+
 	}
 
 	for _, segment := range raw.Intro {
+
 		record.Intro = append(record.Intro, normalizeSegment(segment))
 	}
 
@@ -29,13 +33,18 @@ func parseMediaResponse(raw mediaResponseRaw) *MediaRecord {
 func normalizeSegment(raw segmentTimestampRaw) SegmentTimestamp {
 
 	start := int64(0)
+
 	if raw.StartMs != nil {
+
 		start = *raw.StartMs
+
 	}
 
 	return SegmentTimestamp{
+
 		StartMs: start,
-		EndMs:   raw.EndMs,
+		EndMs: raw.EndMs,
+
 	}
 
 }

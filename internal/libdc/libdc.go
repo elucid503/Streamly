@@ -21,15 +21,19 @@ import (
 
 type DescriptionHandler func(sdp string, offer bool)
 
-// Peer wraps a libdatachannel PeerConnection with Discord media tracks.
 type Peer struct {
-	id         uint64
-	handle     *C.StreamlyPeer
-	onDesc     DescriptionHandler
+
+	id uint64
+	handle *C.StreamlyPeer
+
+	onDesc DescriptionHandler
+
 	audioClock uint32
 	videoClock uint32
-	mu         sync.Mutex
-	alive      bool
+
+	mu sync.Mutex
+	alive bool
+
 }
 
 func NewPeer(stunURL string) (*Peer, error) {
@@ -40,6 +44,7 @@ func NewPeer(stunURL string) (*Peer, error) {
 	handle := C.streamly_peer_create(cStun)
 
 	if handle == nil {
+
 		return nil, errors.New("libdatachannel peer create failed")
 	}
 
@@ -55,6 +60,7 @@ func NewPeer(stunURL string) (*Peer, error) {
 func (p *Peer) Destroy() {
 
 	if p == nil {
+
 		return
 	}
 
@@ -65,23 +71,33 @@ func (p *Peer) Destroy() {
 	p.onDesc = nil
 
 	if p.handle != nil {
+
 		C.streamly_peer_destroy(p.handle)
 		p.handle = nil
+
 	}
 
 	if p.id != 0 {
+
 		unregisterPeer(p.id)
 		p.id = 0
+
 	}
 
 }
 
-func (p *Peer) OnLocalDescription(handler DescriptionHandler) { p.onDesc = handler }
+func (p *Peer) OnLocalDescription(handler DescriptionHandler) {
+
+	p.onDesc = handler
+
+}
 
 func (p *Peer) AddAudioTrack(ssrc uint32, payloadType int) error {
 
 	if C.streamly_peer_add_audio(p.handle, C.uint32_t(ssrc), C.int(payloadType)) == 0 {
+
 		return errors.New("libdatachannel audio track add failed")
+
 	}
 
 	return nil
@@ -91,7 +107,9 @@ func (p *Peer) AddAudioTrack(ssrc uint32, payloadType int) error {
 func (p *Peer) AddVideoTrack(ssrc, rtxSSRC uint32, payloadType, rtxPayloadType int) error {
 
 	if C.streamly_peer_add_video(p.handle, C.uint32_t(ssrc), C.uint32_t(rtxSSRC), C.int(payloadType), C.int(rtxPayloadType)) == 0 {
+
 		return errors.New("libdatachannel video track add failed")
+
 	}
 
 	return nil
@@ -106,7 +124,9 @@ func (p *Peer) SetRemoteAnswer(sdp string) error {
 	defer C.free(unsafe.Pointer(cSDP))
 
 	if C.streamly_peer_set_remote_answer(p.handle, cSDP) == 0 {
+
 		return errors.New("libdatachannel set remote answer failed")
+
 	}
 
 	return nil
@@ -116,11 +136,15 @@ func (p *Peer) SetRemoteAnswer(sdp string) error {
 func (p *Peer) SetupPacketizers(audioSSRC uint32, audioPT int, videoSSRC uint32, videoPT int) error {
 
 	if C.streamly_peer_setup_audio_packetizer(p.handle, C.uint32_t(audioSSRC), C.int(audioPT), 2, 8) == 0 {
+
 		return errors.New("libdatachannel audio packetizer setup failed")
+
 	}
 
 	if C.streamly_peer_setup_video_packetizer(p.handle, C.uint32_t(videoSSRC), C.int(videoPT), 0, 10) == 0 {
+
 		return errors.New("libdatachannel video packetizer setup failed")
+
 	}
 
 	return nil
@@ -151,10 +175,10 @@ func (p *Peer) MediaReady() bool {
 
 }
 
-// SendAudio fires one Opus frame at the track (best-effort) and advances the RTP clock when attempted.
 func (p *Peer) SendAudio(data []byte, durationMs float64) {
 
 	if len(data) == 0 {
+
 		return
 	}
 
@@ -162,47 +186,52 @@ func (p *Peer) SendAudio(data []byte, durationMs float64) {
 	defer p.mu.Unlock()
 
 	if !p.alive || p.handle == nil {
+
 		return
 	}
 
 	if C.streamly_peer_send_audio(p.handle, (*C.uint8_t)(unsafe.Pointer(&data[0])), C.size_t(len(data))) == 1 {
+
 		C.streamly_peer_advance_audio_timestamp(p.handle, C.uint32_t(p.audioClock), C.double(durationMs))
+
 	}
 
 }
 
-// AdvanceAudio moves the RTP audio clock forward without sending a packet.
 func (p *Peer) AdvanceAudio(durationMs float64) {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if !p.alive || p.handle == nil {
+
 		return
+
 	}
 
 	C.streamly_peer_advance_audio_timestamp(p.handle, C.uint32_t(p.audioClock), C.double(durationMs))
 
 }
 
-// AdvanceVideo moves the RTP video clock forward without sending a packet.
 func (p *Peer) AdvanceVideo(durationMs float64) {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if !p.alive || p.handle == nil {
+
 		return
+
 	}
 
 	C.streamly_peer_advance_video_timestamp(p.handle, C.uint32_t(p.videoClock), C.double(durationMs))
 
 }
 
-// SendVideo fires one H264 frame at the track (best-effort) and advances the RTP clock when attempted.
 func (p *Peer) SendVideo(data []byte, durationMs float64) {
 
 	if len(data) == 0 {
+
 		return
 	}
 
@@ -210,11 +239,15 @@ func (p *Peer) SendVideo(data []byte, durationMs float64) {
 	defer p.mu.Unlock()
 
 	if !p.alive || p.handle == nil {
+
 		return
+
 	}
 
 	if C.streamly_peer_send_video(p.handle, (*C.uint8_t)(unsafe.Pointer(&data[0])), C.size_t(len(data))) == 1 {
+
 		C.streamly_peer_advance_video_timestamp(p.handle, C.uint32_t(p.videoClock), C.double(durationMs))
+
 	}
 
 }
@@ -225,7 +258,9 @@ func streamlyDescriptionTrampoline(id C.uint64_t, sdp *C.char, descType C.int) {
 	peer, ok := lookupPeer(uint64(id))
 
 	if !ok || peer.onDesc == nil || sdp == nil {
+
 		return
+
 	}
 
 	peer.onDesc(C.GoString(sdp), int(descType) == int(C.STREAMLY_DESC_OFFER))

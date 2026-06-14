@@ -1,23 +1,25 @@
 package streamer
 
-// VoiceConnection manages the voice-gateway session for joining a channel.
 type VoiceConnection struct {
-	streamer  *Streamer
-	guildID   *string
+
+	streamer *Streamer
+	guildID *string
 	channelID string
-	botID     string
-	gateway   *mediaGateway
+	botID string
+	gateway *mediaGateway
 
 	streamConnection *StreamConnection
+
 }
 
 func newVoiceConnection(streamer *Streamer, guildID *string, channelID, botID string, ready chan *MediaPeer) *VoiceConnection {
 
 	conn := &VoiceConnection{
-		streamer:  streamer,
-		guildID:   guildID,
+
+		streamer: streamer,
+		guildID: guildID,
 		channelID: channelID,
-		botID:     botID,
+		botID: botID,
 	}
 
 	conn.gateway = newMediaGateway("voice", conn.serverID(), botID, parseDaveChannelID(channelID), ready, true)
@@ -29,6 +31,7 @@ func newVoiceConnection(streamer *Streamer, guildID *string, channelID, botID st
 func (v *VoiceConnection) guildIDString() string {
 
 	if v.guildID == nil {
+
 		return ""
 	}
 
@@ -39,6 +42,7 @@ func (v *VoiceConnection) guildIDString() string {
 func (v *VoiceConnection) serverID() string {
 
 	if v.guildID != nil {
+
 		return *v.guildID
 	}
 
@@ -49,6 +53,7 @@ func (v *VoiceConnection) serverID() string {
 func (v *VoiceConnection) streamType() string {
 
 	if v.guildID == nil {
+
 		return "call"
 	}
 
@@ -77,6 +82,7 @@ func (v *VoiceConnection) setTokens(server, token string) {
 func (v *VoiceConnection) stop() {
 
 	if v.streamConnection != nil {
+
 		v.streamConnection.stop()
 		v.streamConnection = nil
 	}

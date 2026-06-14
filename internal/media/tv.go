@@ -10,13 +10,13 @@ import (
 
 const tvSelectionPrefix = "tv:"
 
-// TVSelection is a live TV channel picked from autocomplete or typed directly.
 type TVSelection struct {
+
 	DaddyID string
 	Channel tvapi.Channel
+
 }
 
-// SearchTV returns catalog channels matching query. An empty query yields popular US channels.
 func (r *Resolver) SearchTV(query string, limit int) ([]tvapi.Channel, error) {
 
 	catalog, err := r.tv.ListChannels()
@@ -45,7 +45,6 @@ func (r *Resolver) SearchTV(query string, limit int) ([]tvapi.Channel, error) {
 
 }
 
-// ResolveTVSelection parses an autocomplete value or free-typed channel name into a TVSelection.
 func (r *Resolver) ResolveTVSelection(value string) (*TVSelection, error) {
 
 	value = strings.TrimSpace(value)
@@ -69,10 +68,16 @@ func (r *Resolver) ResolveTVSelection(value string) (*TVSelection, error) {
 		channel, ok := catalog.FindByID(match[1])
 
 		if !ok {
+
 			return nil, fmt.Errorf("channel not found: daddyId %s", match[1])
 		}
 
-		return &TVSelection{DaddyID: channel.DaddyID, Channel: channel}, nil
+		return &TVSelection{
+
+			DaddyID: channel.DaddyID,
+			Channel: channel,
+
+		}, nil
 
 	}
 
@@ -86,13 +91,23 @@ func (r *Resolver) ResolveTVSelection(value string) (*TVSelection, error) {
 
 	if channel, ok := catalog.FindByName(value); ok {
 
-		return &TVSelection{DaddyID: channel.DaddyID, Channel: channel}, nil
+		return &TVSelection{
+
+			DaddyID: channel.DaddyID,
+			Channel: channel,
+
+		}, nil
 
 	}
 
 	if channel, ok := catalog.FindBySlug(value); ok {
 
-		return &TVSelection{DaddyID: channel.DaddyID, Channel: channel}, nil
+		return &TVSelection{
+
+			DaddyID: channel.DaddyID,
+			Channel: channel,
+
+		}, nil
 
 	}
 
@@ -106,30 +121,33 @@ func (r *Resolver) ResolveTVSelection(value string) (*TVSelection, error) {
 
 	channel := hits[0]
 
-	return &TVSelection{DaddyID: channel.DaddyID, Channel: channel}, nil
+	return &TVSelection{
+
+		DaddyID: channel.DaddyID,
+		Channel: channel,
+
+	}, nil
 
 }
 
-// TVSelectionValue encodes a channel for Discord autocomplete.
 func TVSelectionValue(daddyID string) string {
 
 	return tvSelectionPrefix + daddyID
 
 }
 
-// TVAutocompleteLabel formats a channel for the /stream autocomplete menu.
 func TVAutocompleteLabel(channel tvapi.Channel) string {
 
 	return fmt.Sprintf("Live TV • %s", channel.Name)
 
 }
 
-// TVStreamURL resolves a fresh HLS playlist URL for a live channel.
 func (r *Resolver) TVStreamURL(daddyID string) (string, error) {
 
 	stream, err := r.tv.ResolveStream(daddyID)
 
 	if err != nil {
+
 		return "", err
 	}
 
@@ -137,20 +155,19 @@ func (r *Resolver) TVStreamURL(daddyID string) (string, error) {
 
 }
 
-// TVStreamEndpoint resolves a live channel URL and the Referer it expects.
 func (r *Resolver) TVStreamEndpoint(daddyID string) (tvapi.ResolvedStream, error) {
 
 	return r.tv.ResolveStream(daddyID)
 
 }
 
-// TVDetails maps a live channel into the shared TitleDetails embed shape.
 func TVDetails(channel tvapi.Channel) TitleDetails {
 
 	return TitleDetails{
 
-		Title:  channel.Name,
+		Title: channel.Name,
 		Poster: channel.Logo,
+
 	}
 
 }

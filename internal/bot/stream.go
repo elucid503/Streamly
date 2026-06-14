@@ -12,24 +12,29 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
-
 	"streamly/internal/config"
 	"streamly/internal/febapi"
 	"streamly/internal/media"
 	"streamly/internal/pool"
 	"streamly/internal/tvapi"
+
+	"github.com/bwmarrin/discordgo"
 )
 
 var (
+
 	selectionValueRE = regexp.MustCompile(`^([12]):(\d+)$`)
-	seasonNumberRE   = regexp.MustCompile(`(\d+)`)
+	seasonNumberRE = regexp.MustCompile(`(\d+)`)
+
 	episodeNumberREs = []*regexp.Regexp{
+
 		regexp.MustCompile(`(?i)s\d{1,2}[ ._-]?e(\d{1,4})`),
 		regexp.MustCompile(`(?i)\b\d{1,2}x(\d{1,4})\b`),
 		regexp.MustCompile(`(?i)\bepisode[ ._-]?(\d{1,4})\b`),
 		regexp.MustCompile(`(?i)\be(\d{1,4})\b`),
+
 	}
+
 )
 
 const autocompleteDeadline = 2500 * time.Millisecond
@@ -37,16 +42,22 @@ const autocompleteDeadline = 2500 * time.Millisecond
 func (b *Bot) onAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	if i.ApplicationCommandData().Name == "seek" {
+
 		b.onSeekAutocomplete(s, i)
 		return
+
 	}
 
 	query := ""
 
 	for _, option := range i.ApplicationCommandData().Options {
+
 		if option.Name == "title" {
+
 			query = strings.TrimSpace(option.StringValue())
+
 		}
+
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), autocompleteDeadline)
@@ -55,8 +66,10 @@ func (b *Bot) onAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreat
 	choices := b.streamTitleChoices(ctx, i, query)
 
 	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+
 		Type: discordgo.InteractionApplicationCommandAutocompleteResult,
 		Data: &discordgo.InteractionResponseData{Choices: choices},
+
 	})
 
 }
@@ -64,9 +77,12 @@ func (b *Bot) onAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreat
 func (b *Bot) streamTitleChoices(ctx context.Context, i *discordgo.InteractionCreate, query string) []*discordgo.ApplicationCommandOptionChoice {
 
 	type streamAutocompleteFetch struct {
+
+		tv []tvapi.Channel
+
 		recent []*discordgo.ApplicationCommandOptionChoice
-		tv     []tvapi.Channel
 		search []febapi.SearchResult
+
 	}
 
 	var fetched streamAutocompleteFetch
@@ -75,24 +91,31 @@ func (b *Bot) streamTitleChoices(ctx context.Context, i *discordgo.InteractionCr
 	wg.Add(1)
 
 	go func() {
+
 		defer wg.Done()
 		fetched.recent = b.recentSearchChoices(ctx, i, query)
+
 	}()
 
 	tvLimit := 5
 
 	if query != "" {
+
 		tvLimit = maxOptions
+
 	}
 
 	wg.Add(1)
 
 	go func() {
+
 		defer wg.Done()
 		channels, err := b.Resolver.SearchTV(query, tvLimit)
 
 		if err != nil {
+
 			return
+
 		}
 
 		fetched.tv = channels
@@ -104,11 +127,14 @@ func (b *Bot) streamTitleChoices(ctx context.Context, i *discordgo.InteractionCr
 		wg.Add(1)
 
 		go func() {
+
 			defer wg.Done()
 			results, err := b.Resolver.Search(query)
 
 			if err == nil {
+
 				fetched.search = results
+
 			}
 
 		}()
@@ -118,17 +144,23 @@ func (b *Bot) streamTitleChoices(ctx context.Context, i *discordgo.InteractionCr
 	done := make(chan struct{})
 
 	go func() {
+
 		wg.Wait()
 		close(done)
+
 	}()
 
 	select {
-	case <-done:
-	case <-ctx.Done():
+
+		case <-done: // all fetches completed
+		case <-ctx.Done():
+
 	}
 
 	if remaining := maxOptions - len(fetched.recent); remaining < tvLimit {
+
 		tvLimit = remaining
+
 	}
 
 	var choices []*discordgo.ApplicationCommandOptionChoice
@@ -138,10 +170,14 @@ func (b *Bot) streamTitleChoices(ctx context.Context, i *discordgo.InteractionCr
 	if tvLimit > 0 {
 
 		for _, channel := range fetched.tv[:minInt(len(fetched.tv), tvLimit)] {
+
 			choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
-				Name:  truncate(media.TVAutocompleteLabel(channel), 100),
+
+				Name: truncate(media.TVAutocompleteLabel(channel), 100),
 				Value: media.TVSelectionValue(channel.DaddyID),
+
 			})
+
 		}
 
 	}
@@ -151,10 +187,14 @@ func (b *Bot) streamTitleChoices(ctx context.Context, i *discordgo.InteractionCr
 	if query != "" && remaining > 0 {
 
 		for _, result := range fetched.search[:minInt(len(fetched.search), remaining)] {
+
 			choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
-				Name:  autocompleteLabel(result),
+
+				Name: autocompleteLabel(result),
 				Value: fmt.Sprintf("%d:%d", result.BoxType, result.ID),
+
 			})
+
 		}
 
 	}
@@ -168,8 +208,10 @@ func (b *Bot) handleStream(s *discordgo.Session, i *discordgo.InteractionCreate)
 	_ = deferReply(s, i)
 
 	if err := b.Pool.RequireAvailable(i.GuildID); err != nil {
+
 		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr(err.Error())})
 		return
+
 	}
 
 	title := optionString(i, "title")
@@ -177,8 +219,10 @@ func (b *Bot) handleStream(s *discordgo.Session, i *discordgo.InteractionCreate)
 	if live, err := b.resolveLiveTV(title); live != nil {
 
 		if err != nil {
+
 			editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("Couldn't resolve that live TV channel.")})
 			return
+
 		}
 
 		b.startLiveStream(s, i, *live, live.Name, media.TVSelectionValue(live.DaddyID))
@@ -189,21 +233,27 @@ func (b *Bot) handleStream(s *discordgo.Session, i *discordgo.InteractionCreate)
 	selection, err := b.Resolver.ResolveSelection(title)
 
 	if err != nil || selection == nil {
+
 		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("No results found for that title.")})
 		return
+
 	}
 
 	shareKey, err := b.Resolver.ShareKey(*selection)
 
 	if err != nil || shareKey == "" {
+
 		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("Couldn't find a streamable source for that title.")})
 		return
+
 	}
 
 	details, err := b.Resolver.Details(*selection)
 
 	if err != nil {
+
 		details = media.TitleDetails{Title: "Your Selection"}
+
 	}
 
 	if b.Resolver.IsMovie(*selection) {
@@ -211,8 +261,10 @@ func (b *Bot) handleStream(s *discordgo.Session, i *discordgo.InteractionCreate)
 		file, err := b.Resolver.MovieFile(shareKey)
 
 		if err != nil || file == nil {
+
 			editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("No playable file was found for that movie.")})
 			return
+
 		}
 
 		b.startStream(s, i, details, shareKey, file.FID, file.FileName, nil, title, nil)
@@ -223,34 +275,46 @@ func (b *Bot) handleStream(s *discordgo.Session, i *discordgo.InteractionCreate)
 	root, err := b.Resolver.ListChildren(shareKey, 0)
 
 	if err != nil {
+
 		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("Couldn't list files for that show.")})
 		return
+
 	}
 
 	seasons := b.Resolver.Seasons(root)
 
 	if len(seasons) > 0 {
+
 		embed := baseEmbed(details, "Select a Season")
 		components := []discordgo.MessageComponent{seasonRow(selection.ID, shareKey, seasons)}
+
 		editMessage(s, i, &discordgo.WebhookEdit{Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}), Components: ptrComponents(components)})
 		return
+
 	}
 
 	episodes := toEpisodes(b.Resolver.Files(root))
 
 	if len(episodes) == 0 {
+
 		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("No episodes were found for that show.")})
 		return
+
 	}
 
 	if epTitles := b.Resolver.EpisodeList(details.IMDBId, 1); epTitles != nil {
+
 		for idx := range episodes {
+
 			episodes[idx].Title = epTitles[episodes[idx].Number]
+
 		}
+
 	}
 
 	embed := baseEmbed(details, "Select an Episode")
 	components := []discordgo.MessageComponent{episodeRow(selection.ID, shareKey, 1, episodes)}
+
 	editMessage(s, i, &discordgo.WebhookEdit{Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}), Components: ptrComponents(components)})
 
 }
@@ -260,7 +324,9 @@ func (b *Bot) handleSelect(s *discordgo.Session, i *discordgo.InteractionCreate,
 	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseDeferredMessageUpdate})
 
 	if len(parts) < 4 {
+
 		return
+
 	}
 
 	kind := parts[1]
@@ -271,99 +337,131 @@ func (b *Bot) handleSelect(s *discordgo.Session, i *discordgo.InteractionCreate,
 	values := i.MessageComponentData().Values
 
 	if len(values) == 0 {
+
 		return
+
 	}
 
 	valueParts := strings.Split(values[0], ":")
 	fid, _ := strconv.Atoi(valueParts[0])
 
 	switch kind {
-	case "season":
 
-		rawSeason := valueParts[1]
-		season, _ := strconv.Atoi(rawSeason)
+		case "season":
 
-		details, err := b.Resolver.Details(media.Selection{ID: id, BoxType: febapi.BoxSeries})
+			rawSeason := valueParts[1]
+			season, _ := strconv.Atoi(rawSeason)
 
-		if err != nil {
-			details = media.TitleDetails{Title: "Your Selection"}
-		}
+			details, err := b.Resolver.Details(media.Selection{ID: id, BoxType: febapi.BoxSeries})
 
-		children, err := b.Resolver.ListChildren(shareKey, fid)
+			if err != nil {
 
-		if err != nil {
-			editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("No episodes were found in that season.")})
-			return
-		}
+				details = media.TitleDetails{Title: "Your Selection"}
 
-		episodes := toEpisodes(b.Resolver.Files(children))
-
-		if len(episodes) == 0 {
-			editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("No episodes were found in that season.")})
-			return
-		}
-
-		if epTitles := b.Resolver.EpisodeList(details.IMDBId, season); epTitles != nil {
-			for i := range episodes {
-				episodes[i].Title = epTitles[episodes[i].Number]
 			}
-		}
 
-		embed := baseEmbed(details, "Select an Episode")
-		components := []discordgo.MessageComponent{episodeRow(id, shareKey, season, episodes)}
-		editMessage(s, i, &discordgo.WebhookEdit{Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}), Components: ptrComponents(components)})
+			children, err := b.Resolver.ListChildren(shareKey, fid)
 
-	case "episode":
+			if err != nil {
 
-		if len(parts) < 5 {
-			return
-		}
+				editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("No episodes were found in that season.")})
+				return
 
-		if err := b.Pool.RequireAvailable(i.GuildID); err != nil {
-			editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr(err.Error())})
-			return
-		}
+			}
 
-		season, _ := strconv.Atoi(parts[4])
-		episode, _ := strconv.Atoi(valueParts[1])
+			episodes := toEpisodes(b.Resolver.Files(children))
 
-		details, err := b.Resolver.Details(media.Selection{ID: id, BoxType: febapi.BoxSeries})
+			if len(episodes) == 0 {
 
-		if err != nil {
-			details = media.TitleDetails{Title: "Your Selection"}
-		}
+				editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("No episodes were found in that season.")})
+				return
 
-		epTitle := details.EpisodeTitles[fmt.Sprintf("%d:%d", season, episode)]
+			}
 
-		if epTitle == "" {
 			if epTitles := b.Resolver.EpisodeList(details.IMDBId, season); epTitles != nil {
-				epTitle = epTitles[episode]
+
+				for i := range episodes {
+
+					episodes[i].Title = epTitles[episodes[i].Number]
+
+				}
+
 			}
-		}
 
-		videoName := b.Resolver.FileName(shareKey, fid)
+			embed := baseEmbed(details, "Select an Episode")
+			components := []discordgo.MessageComponent{episodeRow(id, shareKey, season, episodes)}
 
-		autoNext := &pool.AutoNextContext{
-			ShowID:         id,
-			ShareKey:       shareKey,
-			Season:         season,
-			Episode:        episode,
-			HistoryValue:   fmt.Sprintf("%d:%d", febapi.BoxSeries, id),
-			ChannelID:      i.ChannelID,
-			VoiceChannelID: voiceChannelID(s, i),
-			UserID:         userID(i),
-		}
+			editMessage(s, i, &discordgo.WebhookEdit{Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}), Components: ptrComponents(components)})
 
-		b.startStream(s, i, details, shareKey, fid, videoName, &episodeRef{Season: season, Episode: episode, Title: epTitle}, fmt.Sprintf("%d:%d", febapi.BoxSeries, id), autoNext)
+		case "episode":
+
+			if len(parts) < 5 {
+
+				return
+
+			}
+
+			if err := b.Pool.RequireAvailable(i.GuildID); err != nil {
+
+				editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr(err.Error())})
+				return
+
+			}
+
+			season, _ := strconv.Atoi(parts[4])
+			episode, _ := strconv.Atoi(valueParts[1])
+
+			details, err := b.Resolver.Details(media.Selection{ID: id, BoxType: febapi.BoxSeries})
+
+			if err != nil {
+
+				details = media.TitleDetails{Title: "Your Selection"}
+
+			}
+
+			epTitle := details.EpisodeTitles[fmt.Sprintf("%d:%d", season, episode)]
+
+			if epTitle == "" {
+
+				if epTitles := b.Resolver.EpisodeList(details.IMDBId, season); epTitles != nil {
+
+					epTitle = epTitles[episode]
+
+				}
+
+			}
+
+			videoName := b.Resolver.FileName(shareKey, fid)
+
+			autoNext := &pool.AutoNextContext{
+
+				ShowID: id,
+				ShareKey: shareKey,
+
+				Season: season,
+				Episode: episode,
+
+				HistoryValue: fmt.Sprintf("%d:%d", febapi.BoxSeries, id),
+
+				ChannelID: i.ChannelID,
+				VoiceChannelID: voiceChannelID(s, i),
+				UserID: userID(i),
+
+			}
+
+			b.startStream(s, i, details, shareKey, fid, videoName, &episodeRef{Season: season, Episode: episode, Title: epTitle}, fmt.Sprintf("%d:%d", febapi.BoxSeries, id), autoNext)
 
 	}
 
 }
 
 type episodeRef struct {
-	Season  int
+
+	Season int
 	Episode int
-	Title   string
+
+	Title string
+
 }
 
 func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, details media.TitleDetails, shareKey string, fid int, videoName string, episode *episodeRef, historyValue string, autoNext *pool.AutoNextContext) {
@@ -373,15 +471,19 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 	channel := memberVoiceChannel(s, i)
 
 	if channel == nil {
+
 		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("Join a voice channel first, then try again.")})
 		return
+
 	}
 
 	session, err := b.Pool.Acquire(channel.GuildID)
 
 	if err != nil {
+
 		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr(workerErrorMessage(err))})
 		return
+
 	}
 
 	qualities, _ := b.Resolver.Qualities(shareKey, fid)
@@ -392,15 +494,19 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 	selected := media.PickQuality(qualities, target)
 
 	if selected != nil {
+
 		target = media.QualityHeight(*selected)
 		label = qualityLabel(*selected)
+
 	}
 
 	ranked := media.RankedQualityURLs(qualities, target)
 	url := ""
 
 	if len(ranked) > 0 {
+
 		url = ranked[0]
+
 	}
 
 	if url == "" {
@@ -408,9 +514,11 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 		resolved, err := b.Resolver.StreamURL(shareKey, fid, target)
 
 		if err != nil || resolved == "" {
+
 			b.Pool.Release(session)
 			editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("No playable source was available for that title.")})
 			return
+
 		}
 
 		url = resolved
@@ -421,54 +529,80 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 
 	captionsPreferred, _ := b.DB.CaptionsEnabled(context.Background(), i.GuildID)
 	textChannelID, textChannelName := textChannelInfo(s, i.ChannelID)
+
 	metadata := metadataFromStream(details, shareKey, fid, videoName, target, label, episode, userID(i), captionsPreferred, autoNext, textChannelID, textChannelName)
 	embed := streamingEmbed(details, channel.ID, episode)
 
 	err = b.Pool.Play(context.Background(), session, pool.Request{
-		GuildID:      channel.GuildID,
-		ChannelID:    channel.ID,
-		Caption:      caption,
-		InitialURL:   url,
+
+		GuildID: channel.GuildID,
+		ChannelID: channel.ID,
+
+		Caption: caption,
+		InitialURL: url,
 		QualityLabel: label,
-		Metadata:     metadata,
-		OnPrepare:      b.prepareStream,
-		OnMediaProbed:  b.armIntroOnProbe,
-		OnNearEnd:      b.handleNearEnd(s, i, session, embed),
+
+		Metadata: metadata,
+
+		OnPrepare: b.prepareStream,
+		OnMediaProbed: b.armIntroOnProbe,
+		OnNearEnd: b.handleNearEnd(s, i, session, embed),
+
 		ResolveURL: func() (string, error) {
+
 			return b.Resolver.StreamURL(metadata.ShareKey, metadata.FID, metadata.Target)
+
 		},
+
 		QualityURL: func(attempt int) (string, error) {
+
 			qualities, err := b.Resolver.Qualities(metadata.ShareKey, metadata.FID)
 
 			if err != nil {
+
 				return "", err
+
 			}
 
 			urls := media.RankedQualityURLs(qualities, metadata.Target)
 
 			if attempt >= len(urls) {
+
 				return "", fmt.Errorf("no more quality fallbacks")
+
 			}
 
 			return urls[attempt], nil
+
 		},
+
 		OnClose: func(reason pool.CloseReason) {
+
 			if reason == pool.CloseStopped {
+
 				return
+
 			}
 
 			closeStreamMessage(s, i, embed, closeLabel(reason))
+
 		},
+
 	})
 
 	if err != nil {
+
 		log.Printf("failed to start the stream: %v", err)
+
 		b.Pool.Release(session)
 		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("Couldn't join your voice channel to start streaming.")})
+
 		return
+
 	}
 
 	components := controlRow(session.ID, false, false)
+
 	editMessage(s, i, &discordgo.WebhookEdit{Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}), Components: ptrComponents(components)})
 	b.recordHistory(i, details.Title, historyValue)
 
@@ -479,21 +613,29 @@ func (b *Bot) resolveLiveTV(title string) (*tvapi.Channel, error) {
 	title = strings.TrimSpace(title)
 
 	if title == "" {
+
 		return nil, nil
+
 	}
 
 	if selectionValueRE.MatchString(title) {
+
 		return nil, nil
+
 	}
 
 	selection, err := b.Resolver.ResolveTVSelection(title)
 
 	if err != nil {
+
 		return nil, err
+
 	}
 
 	if selection == nil {
+
 		return nil, nil
+
 	}
 
 	return &selection.Channel, nil
@@ -507,23 +649,30 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 	voice := memberVoiceChannel(s, i)
 
 	if voice == nil {
+
 		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("Join a voice channel first, then try again.")})
 		return
+
 	}
 
 	session, err := b.Pool.Acquire(voice.GuildID)
 
 	if err != nil {
+
 		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr(workerErrorMessage(err))})
 		return
+
 	}
 
 	endpoint, err := b.Resolver.TVStreamEndpoint(channel.DaddyID)
 
 	if err != nil || endpoint.URL == "" {
+
 		b.Pool.Release(session)
 		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("No live source was available for that channel.")})
+
 		return
+
 	}
 
 	details := media.TVDetails(channel)
@@ -532,60 +681,95 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 
 	tvChannel := channel
 	metadata := &pool.StreamMetadata{
-		Live:      true,
-		DaddyID:   daddyID,
-		Label:     "Live",
-		Details:   details,
+
+		Live: true,
+		DaddyID: daddyID,
+		Label: "Live",
+
+		Details: details,
 		TVChannel: &tvChannel,
+
 	}
 
 	embed := liveStreamingEmbed(details, channel, voice.ID)
 
 	resolveLive := func() (tvapi.ResolvedStream, error) {
+
 		return b.Resolver.TVStreamEndpoint(metadata.DaddyID)
+
 	}
 
 	err = b.Pool.Play(context.Background(), session, pool.Request{
-		GuildID:      voice.GuildID,
-		ChannelID:    voice.ID,
-		Caption:      caption,
-		InitialURL:   endpoint.URL,
+
+		GuildID: voice.GuildID,
+		ChannelID: voice.ID,
+
+		Caption: caption,
+		InitialURL: endpoint.URL,
+
 		QualityLabel: "Live",
-		Headers:      config.TVStreamHeadersForReferer(endpoint.Referer),
-		Live:         true,
-		Metadata:     metadata,
-		OnPrepare:    b.prepareStream,
+
+		Headers: config.TVStreamHeadersForReferer(endpoint.Referer),
+		Live: true,
+
+		Metadata: metadata,
+		OnPrepare: b.prepareStream,
+
 		ResolveURL: func() (string, error) {
+
 			stream, err := resolveLive()
+
 			if err != nil {
+
 				return "", err
+
 			}
+
 			return stream.URL, nil
+
 		},
+
 		ResolveHeaders: func() map[string]string {
+
 			stream, err := resolveLive()
+
 			if err != nil || stream.Referer == "" {
+
 				return nil
+
 			}
+
 			return config.TVStreamHeadersForReferer(stream.Referer)
+
 		},
+
 		OnClose: func(reason pool.CloseReason) {
+
 			if reason == pool.CloseStopped {
+
 				return
+
 			}
 
 			closeStreamMessage(s, i, embed, closeLabel(reason))
+
 		},
+
 	})
 
 	if err != nil {
+
 		log.Printf("failed to start the live stream: %v", err)
+
 		b.Pool.Release(session)
 		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("Couldn't join your voice channel to start streaming.")})
+
 		return
+
 	}
 
 	components := controlRow(session.ID, false, true)
+
 	editMessage(s, i, &discordgo.WebhookEdit{Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}), Components: ptrComponents(components)})
 	b.recordHistory(i, historyTitle, historyValue)
 
@@ -596,17 +780,23 @@ func liveStreamingEmbed(details media.TitleDetails, channel tvapi.Channel, voice
 	embed := baseEmbed(details, "Now Streaming")
 
 	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+
 		Name: "Category", Value: channel.Category, Inline: true,
 	})
 
 	region := channel.Country.Name
+
 	if region != "" {
+
 		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+
 			Name: "Region", Value: region, Inline: true,
 		})
+
 	}
 
 	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+
 		Name: "Channel", Value: fmt.Sprintf("<#%s>", voiceChannelID), Inline: true,
 	})
 
@@ -619,30 +809,47 @@ func (b *Bot) handleControl(s *discordgo.Session, i *discordgo.InteractionCreate
 	session := activeSession(s, i, b.Pool)
 
 	if session == nil || !session.Busy {
+
 		respondEmbed(s, i, simpleEmbed("Stream Control", "No Active Stream", "No active stream was found for this server."))
 		return
+
 	}
 
 	switch kind {
+
 	case "stop":
+
 		b.cancelPendingAutoNext(i.GuildID)
+
 		embed := controlEmbed(b.Pool, session, "Stream Stopped", "Playback has been stopped.")
 		b.Pool.Stop(session)
+
 		respondEmbed(s, i, embed)
+
 	case "pause":
+
 		if session.Live() {
+
 			respondEmbed(s, i, simpleEmbed("Stream Control", "Live TV", "Live streams cannot be paused."))
 			return
+
 		}
+
 		b.Pool.Pause(session)
 		respondEmbed(s, i, controlEmbed(b.Pool, session, "Stream Paused", "Playback has been paused."))
+
 	case "resume":
+
 		if session.Live() {
+
 			respondEmbed(s, i, simpleEmbed("Stream Control", "Live TV", "Live streams cannot be paused."))
 			return
+
 		}
+
 		b.Pool.Resume(session)
 		respondEmbed(s, i, controlEmbed(b.Pool, session, "Stream Resumed", "Playback has resumed."))
+
 	}
 
 }
@@ -650,7 +857,9 @@ func (b *Bot) handleControl(s *discordgo.Session, i *discordgo.InteractionCreate
 func (b *Bot) handleStopButton(s *discordgo.Session, i *discordgo.InteractionCreate, parts []string) {
 
 	if len(parts) < 3 {
+
 		return
+
 	}
 
 	guildID := parts[2]
@@ -660,7 +869,9 @@ func (b *Bot) handleStopButton(s *discordgo.Session, i *discordgo.InteractionCre
 	session := b.Pool.Get(guildID)
 
 	if session != nil {
+
 		b.Pool.Stop(session)
+
 	}
 
 	embeds, components := endedCard(i.Message.Embeds, "Stream Ended")
@@ -671,41 +882,57 @@ func (b *Bot) handleStopButton(s *discordgo.Session, i *discordgo.InteractionCre
 func (b *Bot) handleToggleButton(s *discordgo.Session, i *discordgo.InteractionCreate, parts []string) {
 
 	if len(parts) < 3 {
+
 		return
+
 	}
 
 	session := b.Pool.Get(parts[2])
 
 	if session == nil || !session.Busy {
+
 		embeds, components := endedCard(i.Message.Embeds, "Stream Ended")
 		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseUpdateMessage, Data: &discordgo.InteractionResponseData{Embeds: embeds, Components: components}})
+
 		return
+
 	}
 
 	paused := parts[1] == "pause"
 
 	if session.Live() {
+
 		return
+
 	}
 
 	if paused {
+
 		b.Pool.Pause(session)
+
 	} else {
+
 		b.Pool.Resume(session)
+
 	}
 
 	header := "Now Streaming"
 
 	if paused {
+
 		header = "Paused"
+
 	}
 
 	var embeds []*discordgo.MessageEmbed
 
 	if len(i.Message.Embeds) > 0 {
+
 		card := *i.Message.Embeds[0]
 		card.Author = &discordgo.MessageEmbedAuthor{Name: header}
+
 		embeds = []*discordgo.MessageEmbed{&card}
+
 	}
 
 	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseUpdateMessage, Data: &discordgo.InteractionResponseData{Embeds: embeds, Components: controlRow(parts[2], paused, session.Live())}})
@@ -715,9 +942,13 @@ func (b *Bot) handleToggleButton(s *discordgo.Session, i *discordgo.InteractionC
 func optionString(i *discordgo.InteractionCreate, name string) string {
 
 	for _, option := range i.ApplicationCommandData().Options {
+
 		if option.Name == name {
+
 			return option.StringValue()
+
 		}
+
 	}
 
 	return ""
@@ -729,13 +960,17 @@ func autocompleteLabel(result febapi.SearchResult) string {
 	kind := "Movie"
 
 	if result.BoxType == febapi.BoxSeries {
+
 		kind = "TV Show"
+
 	}
 
 	year := ""
 
 	if result.Year > 0 {
+
 		year = fmt.Sprintf(" (%d)", result.Year)
+
 	}
 
 	return truncate(fmt.Sprintf("%s • %s%s", kind, result.Title, year), 100)
@@ -753,13 +988,17 @@ func textChannelNameForID(s *discordgo.Session, channelID string) string {
 func textChannelInfo(s *discordgo.Session, channelID string) (string, string) {
 
 	if channelID == "" {
+
 		return "", ""
+
 	}
 
 	channel, err := s.Channel(channelID)
 
 	if err != nil || channel == nil {
+
 		return channelID, ""
+
 	}
 
 	return channel.ID, channel.Name
@@ -771,7 +1010,9 @@ func overlayCaption(title string, episode *episodeRef) string {
 	name := truncate(title, 53)
 
 	if episode == nil {
+
 		return name
+
 	}
 
 	return fmt.Sprintf("%s • S%dE%d", name, episode.Season, episode.Episode)
@@ -783,15 +1024,23 @@ func streamingEmbed(details media.TitleDetails, channelID string, episode *episo
 	embed := baseEmbed(details, "Now Streaming")
 
 	if episode != nil {
+
 		ep := fmt.Sprintf("S%dE%d", episode.Season, episode.Episode)
+
 		if episode.Title != "" {
+
 			ep += " — " + episode.Title
+
 		}
+
 		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{Name: "Now Playing", Value: ep, Inline: true})
+
 	}
 
 	if details.IMDBRating != "" {
+
 		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{Name: "IMDb", Value: details.IMDBRating + " / 10", Inline: true})
+
 	}
 
 	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{Name: "Channel", Value: fmt.Sprintf("<#%s>", channelID), Inline: true})
@@ -803,7 +1052,9 @@ func streamingEmbed(details media.TitleDetails, channelID string, episode *episo
 func workerErrorMessage(err error) string {
 
 	if errors.Is(err, pool.ErrNoWorker) || errors.Is(err, pool.ErrWorkerBusy) {
+
 		return err.Error()
+
 	}
 
 	return "Could not start streaming right now. Try again shortly."
@@ -813,7 +1064,9 @@ func workerErrorMessage(err error) string {
 func closeLabel(reason pool.CloseReason) string {
 
 	if reason == pool.CloseError {
+
 		return "Streaming Failed"
+
 	}
 
 	return "Stream Ended"
@@ -829,11 +1082,15 @@ func strPtr(value string) *string {
 func userID(i *discordgo.InteractionCreate) string {
 
 	if i.Member != nil && i.Member.User != nil {
+
 		return i.Member.User.ID
+
 	}
 
 	if i.User != nil {
+
 		return i.User.ID
+
 	}
 
 	return ""
@@ -843,7 +1100,9 @@ func userID(i *discordgo.InteractionCreate) string {
 func minInt(a, b int) int {
 
 	if a < b {
+
 		return a
+
 	}
 
 	return b
@@ -851,10 +1110,14 @@ func minInt(a, b int) int {
 }
 
 type episode struct {
-	FID      int
-	Number   int
+
+	FID int
+
+	Number int
 	FileName string
-	Title    string
+
+	Title string
+
 }
 
 func seasonRow(id int, shareKey string, seasons []febapi.FebboxFile) discordgo.ActionsRow {
@@ -866,16 +1129,21 @@ func seasonRow(id int, shareKey string, seasons []febapi.FebboxFile) discordgo.A
 		info := seasonInfo(season.FileName, index+1)
 
 		options = append(options, discordgo.SelectMenuOption{
+
 			Label: truncate(info.Label, 100),
 			Value: fmt.Sprintf("%d:%d", season.FID, info.Number),
+
 		})
 
 	}
 
 	return discordgo.ActionsRow{Components: []discordgo.MessageComponent{discordgo.SelectMenu{
-		CustomID:    fmt.Sprintf("stream:season:%d:%s", id, shareKey),
+
+		CustomID: fmt.Sprintf("stream:season:%d:%s", id, shareKey),
+
 		Placeholder: "Choose a season",
-		Options:     options,
+		Options: options,
+
 	}}}
 
 }
@@ -889,41 +1157,57 @@ func episodeRow(id int, shareKey string, season int, episodes []episode) discord
 		label := fmt.Sprintf("Episode %d", ep.Number)
 
 		if ep.Title != "" {
+
 			label = truncate(fmt.Sprintf("E%d • %s", ep.Number, ep.Title), 100)
+
 		}
 
 		options = append(options, discordgo.SelectMenuOption{
+
 			Label: label,
 			Value: fmt.Sprintf("%d:%d", ep.FID, ep.Number),
+
 		})
 
 	}
 
 	return discordgo.ActionsRow{Components: []discordgo.MessageComponent{discordgo.SelectMenu{
-		CustomID:    fmt.Sprintf("stream:episode:%d:%s:%d", id, shareKey, season),
+
+		CustomID: fmt.Sprintf("stream:episode:%d:%s:%d", id, shareKey, season),
+
 		Placeholder: "Choose an episode",
-		Options:     options,
+		Options: options,
+
 	}}}
 
 }
 
 func seasonInfo(name string, ordinal int) struct {
+
 	Number int
-	Label  string
+	Label string
+
 } {
 
 	if match := seasonNumberRE.FindStringSubmatch(name); len(match) > 1 {
+
 		number, _ := strconv.Atoi(match[1])
+
 		return struct {
+
 			Number int
-			Label  string
-		}{Number: number, Label: fmt.Sprintf("Season %d", number)}
+			Label string
+
+		}{ Number: number, Label: fmt.Sprintf("Season %d", number) }
+
 	}
 
 	return struct {
+
 		Number int
-		Label  string
-	}{Number: ordinal, Label: titleCase(name)}
+		Label string
+
+	}{ Number: ordinal, Label: titleCase(name) }
 
 }
 
@@ -943,16 +1227,22 @@ func toEpisodes(files []febapi.FebboxFile) []episode {
 		number := episodeNumber(file.FileName)
 
 		if number == 0 {
+
 			fallback++
 			number = fallback
+
 		}
 
 		candidate := episode{FID: file.FID, Number: number, FileName: file.FileName}
 
 		if existing, exists := byNumber[number]; !exists {
+
 			byNumber[number] = candidate
+
 		} else if media.StreamFilePreference(candidate.FileName) > media.StreamFilePreference(existing.FileName) {
+
 			byNumber[number] = candidate
+
 		}
 
 	}
@@ -960,13 +1250,17 @@ func toEpisodes(files []febapi.FebboxFile) []episode {
 	result := make([]episode, 0, len(byNumber))
 
 	for _, ep := range byNumber {
+
 		result = append(result, ep)
+
 	}
 
 	sortEpisodes(result)
 
 	if len(result) > maxOptions {
+
 		result = result[:maxOptions]
+
 	}
 
 	return result
@@ -976,6 +1270,7 @@ func toEpisodes(files []febapi.FebboxFile) []episode {
 func sortEpisodes(episodes []episode) {
 
 	sort.Slice(episodes, func(i, j int) bool {
+
 		return episodes[i].Number < episodes[j].Number
 	})
 
@@ -984,10 +1279,14 @@ func sortEpisodes(episodes []episode) {
 func episodeNumber(name string) int {
 
 	for _, pattern := range episodeNumberREs {
+
 		if match := pattern.FindStringSubmatch(name); len(match) > 1 {
+
 			number, _ := strconv.Atoi(match[1])
 			return number
+
 		}
+
 	}
 
 	return 0

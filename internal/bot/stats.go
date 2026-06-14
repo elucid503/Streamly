@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"runtime"
 
-	"github.com/bwmarrin/discordgo"
-
 	"streamly/internal/pool"
+
+	"github.com/bwmarrin/discordgo"
 )
 
 func (b *Bot) handleStats(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -14,17 +14,21 @@ func (b *Bot) handleStats(s *discordgo.Session, i *discordgo.InteractionCreate) 
 	session := activeSession(s, i, b.Pool)
 
 	if session == nil {
+
 		respondEphemeral(s, i, "No active stream was found for this server.")
 		return
+
 	}
 
 	stats := b.Pool.Stats(session)
 
 	embed := &discordgo.MessageEmbed{
-		Color:  embedColor,
+
 		Author: &discordgo.MessageEmbedAuthor{Name: "Stream Stats"},
-		Title:  fallbackCaption(stats.Caption, "Active Stream"),
+		Title: fallbackCaption(stats.Caption, "Active Stream"),
+
 		Fields: []*discordgo.MessageEmbedField{
+
 			{Name: "Status", Value: statusLabel(stats.Paused), Inline: true},
 			{Name: "Uptime", Value: formatClock(stats.UptimeMs), Inline: true},
 			{Name: "Channel", Value: channelLabel(stats.ChannelID), Inline: true},
@@ -35,11 +39,16 @@ func (b *Bot) handleStats(s *discordgo.Session, i *discordgo.InteractionCreate) 
 			{Name: "Subtitles", Value: subtitlesLabel(stats), Inline: true},
 			{Name: "Progress", Value: progressLabel(stats.PositionMs, stats.DurationMs), Inline: true},
 		},
+
+		Color: embedColor,
+
 	}
 
 	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{Embeds: []*discordgo.MessageEmbed{embed}, Flags: discordgo.MessageFlagsEphemeral},
+
 	})
 
 }
@@ -47,7 +56,9 @@ func (b *Bot) handleStats(s *discordgo.Session, i *discordgo.InteractionCreate) 
 func statusLabel(paused bool) string {
 
 	if paused {
+
 		return "Paused"
+
 	}
 
 	return "Streaming"
@@ -57,7 +68,9 @@ func statusLabel(paused bool) string {
 func channelLabel(channelID string) string {
 
 	if channelID == "" {
+
 		return "Unknown"
+
 	}
 
 	return fmt.Sprintf("<#%s>", channelID)
@@ -69,7 +82,9 @@ func subtitlesLabel(stats pool.Stats) string {
 	if stats.CaptionsEnabled {
 
 		if stats.CaptionSource != "" {
+
 			return "On (" + stats.CaptionSource + ")"
+
 		}
 
 		return "On"
@@ -83,7 +98,9 @@ func subtitlesLabel(stats pool.Stats) string {
 func fallbackCaption(value, fallback string) string {
 
 	if value == "" {
+
 		return fallback
+
 	}
 
 	return value
@@ -93,7 +110,9 @@ func fallbackCaption(value, fallback string) string {
 func positionLabel(positionMs int64, durationMs *int64) string {
 
 	if durationMs == nil {
+
 		return formatClock(positionMs)
+
 	}
 
 	return fmt.Sprintf("%s / %s", formatClock(positionMs), formatClock(*durationMs))
@@ -103,13 +122,17 @@ func positionLabel(positionMs int64, durationMs *int64) string {
 func progressLabel(positionMs int64, durationMs *int64) string {
 
 	if durationMs == nil || *durationMs <= 0 {
+
 		return "—"
+
 	}
 
 	percent := float64(positionMs) / float64(*durationMs) * 100
 
 	if percent > 100 {
+
 		percent = 100
+
 	}
 
 	return fmt.Sprintf("%.0f%%", percent)

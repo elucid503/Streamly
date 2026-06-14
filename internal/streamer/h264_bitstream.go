@@ -2,12 +2,13 @@ package streamer
 
 import "math/bits"
 
-// bitReader reads an H264 RBSP bit by bit, skipping emulation-prevention bytes.
-// It panics on a bad offset; rewriteSPSVUI recovers and keeps the original frame.
 type bitReader struct {
-	buf        []byte
+
+	buf []byte
+
 	byteOffset int
-	bitOffset  int
+	bitOffset int
+
 }
 
 func newBitReader(buf []byte) *bitReader {
@@ -19,6 +20,7 @@ func newBitReader(buf []byte) *bitReader {
 func (r *bitReader) readBits(count int) uint32 {
 
 	if count == 0 {
+
 		return 0
 	}
 
@@ -27,11 +29,13 @@ func (r *bitReader) readBits(count int) uint32 {
 	for count > 0 {
 
 		if r.byteOffset >= len(r.buf) {
+
 			panic("bitReader: bad byte offset")
 		}
 
 		if r.bitOffset == 0 && r.byteOffset >= 2 &&
 			r.buf[r.byteOffset-2] == 0 && r.buf[r.byteOffset-1] == 0 && r.buf[r.byteOffset] == 3 {
+
 			r.byteOffset++ // Skip the emulation-prevention byte.
 		}
 
@@ -46,6 +50,7 @@ func (r *bitReader) readBits(count int) uint32 {
 			numBits := count
 
 			if room := 8 - r.bitOffset; room < numBits {
+
 				numBits = room
 			}
 
@@ -56,6 +61,7 @@ func (r *bitReader) readBits(count int) uint32 {
 			r.bitOffset += numBits
 
 			if r.bitOffset == 8 {
+
 				r.bitOffset = 0
 				r.byteOffset++
 			}
@@ -68,12 +74,12 @@ func (r *bitReader) readBits(count int) uint32 {
 
 }
 
-// readUE reads an unsigned Exp-Golomb value.
 func (r *bitReader) readUE() int {
 
 	leading := 0
 
 	for r.readBits(1) == 0 {
+
 		leading++
 	}
 
@@ -81,12 +87,12 @@ func (r *bitReader) readUE() int {
 
 }
 
-// readSE reads a signed Exp-Golomb value.
 func (r *bitReader) readSE() int {
 
 	unsigned := r.readUE()
 
 	if unsigned%2 == 0 {
+
 		return -unsigned / 2
 	}
 
@@ -94,11 +100,12 @@ func (r *bitReader) readSE() int {
 
 }
 
-// bitWriter writes an H264 RBSP bit by bit, reinserting emulation-prevention bytes.
 type bitWriter struct {
-	arr         []byte
+
+	arr []byte
 	pendingByte byte
-	bitOffset   int
+	bitOffset int
+
 }
 
 func (w *bitWriter) toBuffer() []byte {
@@ -110,6 +117,7 @@ func (w *bitWriter) toBuffer() []byte {
 func (w *bitWriter) flush() {
 
 	if w.pendingByte <= 3 && len(w.arr) >= 2 && w.arr[len(w.arr)-1] == 0 && w.arr[len(w.arr)-2] == 0 {
+
 		w.arr = append(w.arr, 3)
 	}
 
@@ -145,6 +153,7 @@ func (w *bitWriter) writeBits(value uint32, count int) {
 			numBits := 8 - w.bitOffset
 
 			if count < numBits {
+
 				numBits = count
 			}
 
@@ -154,6 +163,7 @@ func (w *bitWriter) writeBits(value uint32, count int) {
 			w.bitOffset += numBits
 
 			if w.bitOffset == 8 {
+
 				w.bitOffset = 0
 				w.flush()
 			}
@@ -164,7 +174,6 @@ func (w *bitWriter) writeBits(value uint32, count int) {
 
 }
 
-// writeUE writes an unsigned Exp-Golomb value.
 func (w *bitWriter) writeUE(value int) {
 
 	value++
@@ -174,12 +183,13 @@ func (w *bitWriter) writeUE(value int) {
 
 }
 
-// writeSE writes a signed Exp-Golomb value.
 func (w *bitWriter) writeSE(value int) {
 
 	if value <= 0 {
+
 		w.writeUE(-2 * value)
 	} else {
+
 		w.writeUE(2*value - 1)
 	}
 

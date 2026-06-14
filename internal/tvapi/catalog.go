@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// popularUSSlugs is a curated popularity order for United States channels.
 var popularUSSlugs = []string{
+
 	"espn-usa",
 	"cnn-usa",
 	"abc-usa",
@@ -29,7 +29,6 @@ var popularUSSlugs = []string{
 	"bravo-usa",
 }
 
-// FindByID returns the channel with the given id, if present.
 func (catalog *ChannelCatalog) FindByID(ID string) (Channel, bool) {
 
 	for _, channel := range catalog.Channels {
@@ -39,13 +38,13 @@ func (catalog *ChannelCatalog) FindByID(ID string) (Channel, bool) {
 			return channel, true
 
 		}
+
 	}
 
 	return Channel{}, false
 
 }
 
-// FindBySlug returns the channel with the given slug, if present.
 func (catalog *ChannelCatalog) FindBySlug(slug string) (Channel, bool) {
 
 	slug = strings.ToLower(strings.TrimSpace(slug))
@@ -57,13 +56,13 @@ func (catalog *ChannelCatalog) FindBySlug(slug string) (Channel, bool) {
 			return channel, true
 
 		}
+
 	}
 
 	return Channel{}, false
 
 }
 
-// FindByName returns the first channel whose name matches case-insensitively.
 func (catalog *ChannelCatalog) FindByName(name string) (Channel, bool) {
 
 	name = strings.ToLower(strings.TrimSpace(name))
@@ -75,13 +74,13 @@ func (catalog *ChannelCatalog) FindByName(name string) (Channel, bool) {
 			return channel, true
 
 		}
+
 	}
 
 	return Channel{}, false
 
 }
 
-// Filter returns channels matching optional country code and/or category (case-insensitive).
 func (catalog *ChannelCatalog) Filter(countryCode, category string) []Channel {
 
 	countryCode = strings.ToLower(strings.TrimSpace(countryCode))
@@ -111,12 +110,12 @@ func (catalog *ChannelCatalog) Filter(countryCode, category string) []Channel {
 
 }
 
-// Search returns channels whose name or slug contains query (case-insensitive).
 func (catalog *ChannelCatalog) Search(query string, limit int) []Channel {
 
 	query = strings.ToLower(strings.TrimSpace(query))
 
 	if query == "" {
+
 		return nil
 	}
 
@@ -151,7 +150,6 @@ func (catalog *ChannelCatalog) Search(query string, limit int) []Channel {
 
 }
 
-// PopularUS returns up to limit United States channels ranked by curated popularity.
 func (catalog *ChannelCatalog) PopularUS(limit int) []Channel {
 
 	if limit <= 0 {
@@ -165,6 +163,7 @@ func (catalog *ChannelCatalog) PopularUS(limit int) []Channel {
 	sort.Slice(us, func(i, j int) bool {
 
 		left := popularityRank(us[i].Slug)
+
 		right := popularityRank(us[j].Slug)
 
 		if left != right {
@@ -187,7 +186,6 @@ func (catalog *ChannelCatalog) PopularUS(limit int) []Channel {
 
 }
 
-// Sorted returns channels ranked by US popularity, then alphabetically by name.
 func (catalog *ChannelCatalog) Sorted() []Channel {
 
 	channels := append([]Channel(nil), catalog.Channels...)
@@ -195,9 +193,11 @@ func (catalog *ChannelCatalog) Sorted() []Channel {
 	sort.Slice(channels, func(i, j int) bool {
 
 		left := popularityRank(channels[i].Slug)
+
 		right := popularityRank(channels[j].Slug)
 
 		if left != right {
+
 			return left < right
 		}
 
@@ -220,6 +220,7 @@ func popularityRank(slug string) int {
 			return index
 
 		}
+
 	}
 
 	return len(popularUSSlugs)

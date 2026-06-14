@@ -16,7 +16,9 @@ func (b *Bot) recordHistory(i *discordgo.InteractionCreate, title, value string)
 	userID := interactionUserID(i)
 
 	if b.DB == nil || userID == "" {
+
 		return
+
 	}
 
 	go func() {
@@ -25,7 +27,9 @@ func (b *Bot) recordHistory(i *discordgo.InteractionCreate, title, value string)
 		defer cancel()
 
 		if err := b.DB.RecordStream(ctx, userID, title, value); err != nil {
+
 			log.Printf("failed to record stream history: %v", err)
+
 		}
 
 	}()
@@ -37,7 +41,9 @@ func (b *Bot) recentSearchChoices(ctx context.Context, i *discordgo.InteractionC
 	userID := interactionUserID(i)
 
 	if b.DB == nil || userID == "" {
+
 		return nil
+
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
@@ -46,8 +52,10 @@ func (b *Bot) recentSearchChoices(ctx context.Context, i *discordgo.InteractionC
 	entries, err := b.DB.RecentSearches(ctx, userID, 10)
 
 	if err != nil {
+
 		log.Printf("failed to load stream history: %v", err)
 		return nil
+
 	}
 
 	var choices []*discordgo.ApplicationCommandOptionChoice
@@ -55,16 +63,22 @@ func (b *Bot) recentSearchChoices(ctx context.Context, i *discordgo.InteractionC
 	for _, entry := range entries {
 
 		if !historyMatchesQuery(entry.Title, query) {
+
 			continue
+
 		}
 
 		choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
-			Name:  historyAutocompleteLabel(entry.Title),
+
+			Name: historyAutocompleteLabel(entry.Title),
 			Value: entry.Value,
+
 		})
 
 		if len(choices) >= recentSearchLimit {
+
 			break
+
 		}
 
 	}
@@ -84,7 +98,9 @@ func historyMatchesQuery(title, query string) bool {
 	query = strings.TrimSpace(query)
 
 	if query == "" {
+
 		return true
+
 	}
 
 	return strings.Contains(strings.ToLower(title), strings.ToLower(query))
@@ -94,11 +110,15 @@ func historyMatchesQuery(title, query string) bool {
 func interactionUserID(i *discordgo.InteractionCreate) string {
 
 	if i.Member != nil && i.Member.User != nil {
+
 		return i.Member.User.ID
+
 	}
 
 	if i.User != nil {
+
 		return i.User.ID
+
 	}
 
 	return ""

@@ -11,36 +11,42 @@ import (
 )
 
 const (
-	databaseName      = "Streamly"
+
+	databaseName = "Streamly"
 	historyCollection = "history"
-	historyKeep       = 20
+	historyKeep = 20
+
 )
 
-// Client wraps Streamly's MongoDB collections.
 type Client struct {
-	client      *mongo.Client
-	history     *mongo.Collection
+
+	client *mongo.Client
+	history *mongo.Collection
 	preferences *mongo.Collection
+
 }
 
-// HistoryEntry is a saved stream selection for a user.
 type HistoryEntry struct {
-	UserID     string    `bson:"userId"`
-	Title      string    `bson:"title"`
-	Value      string    `bson:"value"`
+
+	UserID string `bson:"userId"`
+	Title string `bson:"title"`
+	Value string `bson:"value"`
+
 	StreamedAt time.Time `bson:"streamedAt"`
+
 }
 
-// Connect opens the Streamly database and ensures indexes.
 func Connect(ctx context.Context, uri string) (*Client, error) {
 
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
 
 	if err != nil {
+
 		return nil, fmt.Errorf("connect mongo: %w", err)
 	}
 
 	if err := client.Ping(ctx, nil); err != nil {
+
 		_ = client.Disconnect(ctx)
 		return nil, fmt.Errorf("ping mongo: %w", err)
 	}
@@ -49,22 +55,30 @@ func Connect(ctx context.Context, uri string) (*Client, error) {
 	history := database.Collection(historyCollection)
 
 	_, err = history.Indexes().CreateOne(ctx, mongo.IndexModel{
+
 		Keys: bson.D{
+
 			{Key: "userId", Value: 1},
 			{Key: "streamedAt", Value: -1},
 		},
+
 	})
 
 	if err != nil {
+
 		_ = client.Disconnect(ctx)
 		return nil, fmt.Errorf("create history index: %w", err)
 	}
 
-	return &Client{client: client, history: history}, nil
+	return &Client{
+
+		client: client,
+		history: history,
+
+	}, nil
 
 }
 
-// RecordStream saves a user's stream pick, deduping by value and trimming old rows.
 func (c *Client) RecordStream(ctx context.Context, userID, title, value string) error {
 
 	userID = trim(userID)
@@ -72,19 +86,24 @@ func (c *Client) RecordStream(ctx context.Context, userID, title, value string) 
 	value = trim(value)
 
 	if userID == "" || title == "" || value == "" {
+
 		return nil
 	}
 
 	_, _ = c.history.DeleteOne(ctx, bson.M{"userId": userID, "value": value})
 
 	_, err := c.history.InsertOne(ctx, HistoryEntry{
-		UserID:     userID,
-		Title:      title,
-		Value:      value,
+
+		UserID: userID,
+		Title: title,
+		Value: value,
+
 		StreamedAt: time.Now().UTC(),
+
 	})
 
 	if err != nil {
+
 		return err
 	}
 
@@ -92,21 +111,21 @@ func (c *Client) RecordStream(ctx context.Context, userID, title, value string) 
 
 }
 
-// RecentSearches returns the newest distinct stream picks for a user.
 func (c *Client) RecentSearches(ctx context.Context, userID string, limit int) ([]HistoryEntry, error) {
 
 	userID = trim(userID)
 
 	if userID == "" || limit <= 0 {
+
 		return nil, nil
 	}
 
-	cursor, err := c.history.Find(ctx, bson.M{"userId": userID}, options.Find().
-		SetSort(bson.D{{Key: "streamedAt", Value: -1}}).
-		SetLimit(int64(limit)))
+	cursor, err := c.history.Find(ctx, bson.M{"userId": userID}, options.Find().SetSort(bson.D{{Key: "streamedAt", Value: -1}}).SetLimit(int64(limit)))
 
 	if err != nil {
+
 		return nil, err
+
 	}
 
 	defer cursor.Close(ctx)
@@ -114,6 +133,7 @@ func (c *Client) RecentSearches(ctx context.Context, userID string, limit int) (
 	var entries []HistoryEntry
 
 	if err := cursor.All(ctx, &entries); err != nil {
+
 		return nil, err
 	}
 
@@ -121,10 +141,10 @@ func (c *Client) RecentSearches(ctx context.Context, userID string, limit int) (
 
 }
 
-// Close disconnects the underlying client.
 func (c *Client) Close(ctx context.Context) error {
 
 	if c == nil || c.client == nil {
+
 		return nil
 	}
 
@@ -134,13 +154,12 @@ func (c *Client) Close(ctx context.Context) error {
 
 func (c *Client) trimHistory(ctx context.Context, userID string) error {
 
-	cursor, err := c.history.Find(ctx, bson.M{"userId": userID}, options.Find().
-		SetSort(bson.D{{Key: "streamedAt", Value: -1}}).
-		SetSkip(historyKeep).
-		SetProjection(bson.M{"_id": 1}))
+	cursor, err := c.history.Find(ctx, bson.M{"userId": userID}, options.Find().SetSort(bson.D{{Key: "streamedAt", Value: -1}}).SetSkip(historyKeep).SetProjection(bson.M{"_id": 1}))
 
 	if err != nil {
+
 		return err
+
 	}
 
 	defer cursor.Close(ctx)
@@ -150,11 +169,15 @@ func (c *Client) trimHistory(ctx context.Context, userID string) error {
 	for cursor.Next(ctx) {
 
 		var row struct {
+
 			ID any `bson:"_id"`
+
 		}
 
 		if err := cursor.Decode(&row); err != nil {
+
 			return err
+
 		}
 
 		stale = append(stale, row.ID)
@@ -162,7 +185,9 @@ func (c *Client) trimHistory(ctx context.Context, userID string) error {
 	}
 
 	if len(stale) == 0 {
+
 		return nil
+
 	}
 
 	_, err = c.history.DeleteMany(ctx, bson.M{"_id": bson.M{"$in": stale}})
@@ -177,11 +202,15 @@ func trim(value string) string {
 	end := len(value)
 
 	for start < end && (value[start] == ' ' || value[start] == '\t' || value[start] == '\n' || value[start] == '\r') {
+
 		start++
+
 	}
 
 	for end > start && (value[end-1] == ' ' || value[end-1] == '\t' || value[end-1] == '\n' || value[end-1] == '\r') {
+
 		end--
+
 	}
 
 	return value[start:end]

@@ -7,24 +7,27 @@ import (
 	"sync"
 )
 
-// Entry is one guild's streaming worker key.
 type Entry struct {
+
 	Token string `json:"token"`
 }
 
-// File maps guild IDs to worker entries.
 type File map[string]Entry
 
-// Store reads and writes workers.json as the single source of truth.
 type Store struct {
+
 	path string
-	mu   sync.RWMutex
+	mu sync.RWMutex
 	data File
 }
 
 func NewStore(path string) *Store {
 
-	return &Store{path: path, data: make(File)}
+	return &Store{
+
+		path: path,
+		data: make(File),
+	}
 
 }
 
@@ -36,15 +39,18 @@ func (s *Store) Load() error {
 	raw, err := os.ReadFile(s.path)
 
 	if errors.Is(err, os.ErrNotExist) {
+
 		s.data = make(File)
 		return nil
 	}
 
 	if err != nil {
+
 		return err
 	}
 
 	if len(raw) == 0 {
+
 		s.data = make(File)
 		return nil
 	}
@@ -52,10 +58,12 @@ func (s *Store) Load() error {
 	var file File
 
 	if err := json.Unmarshal(raw, &file); err != nil {
+
 		return err
 	}
 
 	if file == nil {
+
 		file = make(File)
 	}
 
@@ -72,6 +80,7 @@ func (s *Store) Save() error {
 	s.mu.RUnlock()
 
 	if err != nil {
+
 		return err
 	}
 
@@ -82,7 +91,10 @@ func (s *Store) Save() error {
 func (s *Store) Set(guildID, token string) error {
 
 	s.mu.Lock()
-	s.data[guildID] = Entry{Token: token}
+	s.data[guildID] = Entry{
+
+		Token: token,
+	}
 	s.mu.Unlock()
 
 	return s.Save()
@@ -108,6 +120,7 @@ func (s *Store) All() File {
 	copy := make(File, len(s.data))
 
 	for guildID, entry := range s.data {
+
 		copy[guildID] = entry
 	}
 

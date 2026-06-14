@@ -13,27 +13,27 @@ import (
 
 const bufferHoldThreshold = 350 * time.Millisecond
 
-// pauseFrameInterval paces the re-sent pause-card IDR: frequent enough that clients
-// never enter the buffering state, sparse enough to stay well under the video bitrate.
+// pauseFrameInterval keeps clients out of buffering without exceeding the video bitrate cap.
 const pauseFrameInterval = 500 * time.Millisecond
 
-// Playback owns one Go Live stream and splices successive transcode sessions into it.
 type Playback struct {
-	streamer   *Streamer
+
+	streamer *Streamer
 	streamConn *StreamConnection
-	sender     *mediaSender
+	sender *mediaSender
 }
 
-// OpenPlayback starts the Go Live stream and waits until the media peer can send.
 func OpenPlayback(ctx context.Context, s *Streamer) (*Playback, error) {
 
 	if s.VoiceConnection() == nil {
+
 		return nil, fmt.Errorf("not connected to a voice channel")
 	}
 
 	streamConn, err := s.CreateStream(ctx)
 
 	if err != nil {
+
 		return nil, err
 	}
 
@@ -43,6 +43,7 @@ func OpenPlayback(ctx context.Context, s *Streamer) (*Playback, error) {
 	sender := &mediaSender{streamConn: streamConn}
 
 	if _, err := sender.resolvePeer(readyCtx); err != nil {
+
 		s.StopStream()
 
 		return nil, fmt.Errorf("stream not ready: %w", err)
@@ -52,7 +53,6 @@ func OpenPlayback(ctx context.Context, s *Streamer) (*Playback, error) {
 
 }
 
-// Run plays one transcode session into the open stream and blocks until it ends.
 func (p *Playback) Run(ctx context.Context, ts *transcode.Session) error {
 
 	p.sender.beginSegment()
@@ -61,7 +61,6 @@ func (p *Playback) Run(ctx context.Context, ts *transcode.Session) error {
 
 }
 
-// Close tears down the Go Live stream after the last session.
 func (p *Playback) Close() {
 
 	p.streamConn.setSpeaking(false)
@@ -70,30 +69,30 @@ func (p *Playback) Close() {
 
 }
 
-// mediaSender ships the transcode's audio and video, pacing both against one shared clock.
 type mediaSender struct {
-	streamConn  *StreamConnection
-	activePeer  *MediaPeer
-	clock       mediaClock
-	pauseMu     sync.Mutex
-	pauseEpoch  uint64
-	pauseSent   time.Duration // Video RTP advanced by pause-card sends, not yet matched on audio.
-	loadingSent time.Duration // Video RTP advanced by live loading-card sends.
-	dropToIDR   bool          // Drop video until the next in-stream IDR so refs survive the pause card.
 
-	lastVideoPTSMs int64 // PTS of the last real video packet sent; freezes the pause card there.
+	streamConn *StreamConnection
+	activePeer *MediaPeer
+	clock mediaClock
 
-	rtpMu      sync.Mutex
-	lastRTPAt  time.Time // When the RTP timeline last advanced (send, drop, or pause shift).
-	gapPending bool      // The next send must first cover the dead air since lastRTPAt.
+	pauseMu sync.Mutex
+	pauseEpoch uint64
+	pauseSent time.Duration
+	loadingSent time.Duration
+	dropToIDR bool
+
+	lastVideoPTSMs int64
+
+	rtpMu sync.Mutex
+	lastRTPAt time.Time
+	gapPending bool
 }
 
-// beginSegment resets pacing for a new transcode session; the RTP gap applies at the first send.
 func (s *mediaSender) beginSegment() {
 
 	s.pauseMu.Lock()
 	s.pauseEpoch = 0
-	s.dropToIDR = false // New sessions open with an IDR; pauseSent debt carries until the next resume.
+	s.dropToIDR = false
 	s.pauseMu.Unlock()
 
 	s.lastVideoPTSMs = -1
@@ -106,14 +105,16 @@ func (s *mediaSender) beginSegment() {
 	s.rtpMu.Unlock()
 
 	if isSplice {
+
 		if peer := s.activePeer; peer != nil && !peer.closed.Load() {
+
 			s.streamConn.setSpeaking(true)
 		}
+
 	}
 
 }
 
-// markRTP records that the RTP timeline advanced just now.
 func (s *mediaSender) markRTP() {
 
 	s.rtpMu.Lock()
@@ -122,12 +123,11 @@ func (s *mediaSender) markRTP() {
 
 }
 
-// segmentSpliceNeedsAudioResync reports whether a new session should resync audio after video anchors first.
 func segmentSpliceNeedsAudioResync(pending bool, lastRTPAt time.Time) bool {
+
 	return pending && !lastRTPAt.IsZero()
 }
 
-// applySegmentGap advances the RTP timeline across dead air between sessions, like pause/resume.
 func (s *mediaSender) applySegmentGap(peer *MediaPeer) {
 
 	s.rtpMu.Lock()
@@ -140,12 +140,14 @@ func (s *mediaSender) applySegmentGap(peer *MediaPeer) {
 	s.rtpMu.Unlock()
 
 	if !segmentSpliceNeedsAudioResync(pending, last) {
+
 		return
 	}
 
 	gap := time.Since(last)
 
 	if gap <= 0 {
+
 		return
 	}
 
@@ -159,24 +161,28 @@ func (s *mediaSender) applySegmentGap(peer *MediaPeer) {
 func (s *mediaSender) resolvePeer(ctx context.Context) (*MediaPeer, error) {
 
 	if s.activePeer != nil && s.activePeer.closed.Load() {
+
 		s.activePeer = nil
 	}
 
 	peer := s.streamConn.peer()
 
 	if peer == nil || peer.closed.Load() {
+
 		ticker := time.NewTicker(200 * time.Millisecond)
 		defer ticker.Stop()
 
 		for {
 
 			select {
+
 			case <-ctx.Done():
 				return nil, fmt.Errorf("stream peer unavailable: %w", ctx.Err())
 			case <-ticker.C:
 				peer = s.streamConn.peer()
 
 				if peer != nil && !peer.closed.Load() {
+
 					goto found
 				}
 
@@ -189,10 +195,12 @@ func (s *mediaSender) resolvePeer(ctx context.Context) (*MediaPeer, error) {
 found:
 
 	if peer == s.activePeer {
+
 		return peer, nil
 	}
 
 	if err := peer.waitSendReady(ctx); err != nil {
+
 		return nil, err
 	}
 
@@ -204,7 +212,6 @@ found:
 
 }
 
-// run drains both feeds concurrently so the encoder never blocks, while one clock keeps A/V in sync.
 func (s *mediaSender) run(ctx context.Context, ts *transcode.Session) error {
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -220,6 +227,7 @@ func (s *mediaSender) run(ctx context.Context, ts *transcode.Session) error {
 	for i := 0; i < 2; i++ {
 
 		if err := <-errs; err != nil && first == nil {
+
 			first = err
 			cancel()
 		}
@@ -230,12 +238,11 @@ func (s *mediaSender) run(ctx context.Context, ts *transcode.Session) error {
 
 }
 
-// holdWhilePaused keeps the video feed alive during a pause by re-sending the cached
-// pause-card IDR, instead of going silent and letting clients fall into a loading state.
-// The audio feed keeps the original blocking wait. Returns false when ctx ends.
+// holdWhilePaused re-sends the pause-card IDR so clients never enter a loading state.
 func (s *mediaSender) holdWhilePaused(ctx context.Context, ts *transcode.Session, kind transcode.Kind) bool {
 
 	if kind != transcode.KindVideo {
+
 		return ts.WaitIfPaused(ctx)
 	}
 
@@ -244,6 +251,7 @@ func (s *mediaSender) holdWhilePaused(ctx context.Context, ts *transcode.Session
 		s.sendPauseFrame(ctx, ts)
 
 		select {
+
 		case <-ctx.Done():
 			return false
 		case <-time.After(pauseFrameInterval):
@@ -255,18 +263,19 @@ func (s *mediaSender) holdWhilePaused(ctx context.Context, ts *transcode.Session
 
 }
 
-// sendPauseFrame ships one pause-card IDR and records the video RTP debt it creates.
 func (s *mediaSender) sendPauseFrame(ctx context.Context, ts *transcode.Session) {
 
 	frame, ok := ts.PauseFrame(s.lastVideoPTSMs)
 
 	if !ok {
+
 		return
 	}
 
 	peer, err := s.resolvePeer(ctx)
 
 	if err != nil {
+
 		return
 	}
 
@@ -286,12 +295,14 @@ func (s *mediaSender) sendLoadingFrame(ctx context.Context, ts *transcode.Sessio
 	frame, ok := ts.LoadingFrame(s.lastVideoPTSMs)
 
 	if !ok {
+
 		return
 	}
 
 	peer, err := s.resolvePeer(ctx)
 
 	if err != nil {
+
 		return
 	}
 
@@ -315,6 +326,7 @@ func (s *mediaSender) applyLoadingHold(peer *MediaPeer) {
 	s.pauseMu.Unlock()
 
 	if duration <= 0 {
+
 		return
 	}
 
@@ -324,18 +336,19 @@ func (s *mediaSender) applyLoadingHold(peer *MediaPeer) {
 
 }
 
-// consumeVideoDrop reports whether a video frame must be dropped because the decoder's
-// references were displaced by the pause card; the next in-stream IDR re-anchors cleanly.
+// consumeVideoDrop drops P-frames after a pause card until the next in-stream IDR re-anchors refs.
 func (s *mediaSender) consumeVideoDrop(frame []byte) bool {
 
 	s.pauseMu.Lock()
 	defer s.pauseMu.Unlock()
 
 	if !s.dropToIDR {
+
 		return false
 	}
 
 	if h264ContainsIDR(frame) {
+
 		s.dropToIDR = false
 		return false
 	}
@@ -347,19 +360,24 @@ func (s *mediaSender) consumeVideoDrop(frame []byte) bool {
 func (s *mediaSender) nextPacket(ctx context.Context, ts *transcode.Session, packets <-chan transcode.Packet, kind transcode.Kind) (transcode.Packet, bool, error) {
 
 	if kind != transcode.KindVideo || s.lastVideoPTSMs < 0 {
+
 		select {
+
 		case <-ctx.Done():
 			return transcode.Packet{}, false, ctx.Err()
 		case packet, ok := <-packets:
 			return packet, ok, nil
 		}
+
 	}
 
 	timer := time.NewTimer(bufferHoldThreshold)
 	defer timer.Stop()
 
 	for {
+
 		select {
+
 		case <-ctx.Done():
 			return transcode.Packet{}, false, ctx.Err()
 		case packet, ok := <-packets:
@@ -368,16 +386,17 @@ func (s *mediaSender) nextPacket(ctx context.Context, ts *transcode.Session, pac
 			s.sendLoadingFrame(ctx, ts)
 			timer.Reset(pauseFrameInterval)
 		}
+
 	}
 
 }
 
-// pump sends one feed in order, pacing each packet against the shared clock and retrying on backpressure.
 func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <-chan transcode.Packet, kind transcode.Kind) error {
 
 	for {
 
 		if !s.holdWhilePaused(ctx, ts, kind) {
+
 			return ctx.Err()
 		}
 
@@ -386,34 +405,41 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 		packet, ok, err := s.nextPacket(ctx, ts, packets, kind)
 
 		if err != nil {
+
 			return err
 		}
 
 		if !ok {
+
 			return nil
 		}
 
 		if !s.holdWhilePaused(ctx, ts, kind) {
+
 			return ctx.Err()
 		}
 
 		s.applyPauseEvent(ts)
 
 		if !s.clock.wait(ctx, packet.PTS, 0) {
+
 			return ctx.Err()
 		}
 
 		duration := packet.Duration
 
 		if kind == transcode.KindVideo {
+
 			duration = frametime(kind)
 		} else if duration <= 0 {
+
 			duration = frametime(kind)
 		}
 
 		peer, err := s.resolvePeer(ctx)
 
 		if err != nil {
+
 			return err
 		}
 
@@ -423,6 +449,7 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 		if kind == transcode.KindVideo {
 
 			if s.consumeVideoDrop(packet.Data) {
+
 				peer.advanceVideo(duration)
 				s.markRTP()
 
@@ -434,7 +461,9 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 			s.markRTP()
 
 		} else {
+
 			if late := s.clock.lateness(packet.PTS); late > bufferHoldThreshold {
+
 				s.clock.shift(late)
 			}
 
@@ -454,17 +483,18 @@ func (s *mediaSender) applyPauseEvent(ts *transcode.Session) {
 	duration, epoch := ts.PauseEvent(s.pauseEpoch)
 
 	if epoch == s.pauseEpoch {
+
 		return
 	}
 
 	s.pauseEpoch = epoch
 
 	if duration <= 0 {
+
 		return
 	}
 
-	// Pause-card sends already advanced video RTP by pauseSent; advance video by the
-	// remainder only, and fold any overshoot into audio so both tracks shift equally.
+	// pauseSent already advanced video RTP; fold any overshoot into audio so both tracks stay aligned.
 	sent := s.pauseSent
 	s.pauseSent = 0
 
@@ -472,19 +502,23 @@ func (s *mediaSender) applyPauseEvent(ts *transcode.Session) {
 	audioGap := duration
 
 	if videoGap < 0 {
+
 		audioGap -= videoGap
 		videoGap = 0
 	}
 
 	if sent > 0 {
+
 		s.dropToIDR = true
 	}
 
 	if peer := s.activePeer; peer != nil {
+
 		s.clock.shift(duration)
 		peer.advanceAudio(audioGap)
 
 		if videoGap > 0 {
+
 			peer.advanceVideo(videoGap)
 		}
 
@@ -493,20 +527,20 @@ func (s *mediaSender) applyPauseEvent(ts *transcode.Session) {
 
 }
 
-// mediaClock is the single playback clock both feeds pace against, keeping audio and video in sync.
 type mediaClock struct {
-	mu        sync.Mutex
+
+	mu sync.Mutex
 	wallStart time.Time
-	ptsStart  time.Duration
-	anchored  bool
+	ptsStart time.Duration
+	anchored bool
 }
 
-// wait blocks until the shared clock reaches pts; extraDelay slows live jitter when the cushion is full.
 func (c *mediaClock) wait(ctx context.Context, pts time.Duration, extraDelay time.Duration) bool {
 
 	c.mu.Lock()
 
 	if !c.anchored {
+
 		c.wallStart = time.Now()
 		c.ptsStart = pts
 		c.anchored = true
@@ -519,22 +553,28 @@ func (c *mediaClock) wait(ctx context.Context, pts time.Duration, extraDelay tim
 	c.mu.Unlock()
 
 	if extraDelay > 0 {
+
 		sleep += extraDelay
 	}
 
 	if sleep <= 0 {
+
 		return true
 	}
 
 	timer := time.NewTimer(sleep)
 
 	select {
+
 	case <-ctx.Done():
 		if !timer.Stop() {
+
 			select {
+
 			case <-timer.C:
 			default:
 			}
+
 		}
 
 		return false
@@ -550,6 +590,7 @@ func (c *mediaClock) lateness(pts time.Duration) time.Duration {
 	defer c.mu.Unlock()
 
 	if !c.anchored {
+
 		return 0
 	}
 
@@ -557,6 +598,7 @@ func (c *mediaClock) lateness(pts time.Duration) time.Duration {
 	actual := time.Since(c.wallStart)
 
 	if actual <= expected {
+
 		return 0
 	}
 
@@ -567,6 +609,7 @@ func (c *mediaClock) lateness(pts time.Duration) time.Duration {
 func (c *mediaClock) shift(duration time.Duration) {
 
 	if duration <= 0 {
+
 		return
 	}
 
@@ -574,12 +617,12 @@ func (c *mediaClock) shift(duration time.Duration) {
 	defer c.mu.Unlock()
 
 	if c.anchored {
+
 		c.wallStart = c.wallStart.Add(duration)
 	}
 
 }
 
-// reset un-anchors the clock so the next session's first packet re-anchors it.
 func (c *mediaClock) reset() {
 
 	c.mu.Lock()
@@ -596,6 +639,7 @@ func frametime(kind transcode.Kind) time.Duration {
 		fps := config.Stream.FrameRate
 
 		if fps <= 0 {
+
 			fps = 30
 		}
 

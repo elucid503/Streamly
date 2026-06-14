@@ -2,31 +2,33 @@ package streamer
 
 import "bytes"
 
-// startCode3 is the 3-byte Annex-B NAL start prefix.
 var startCode3 = []byte{0, 0, 1}
 
-const h264NalTypeSPS = 7 // SPS NAL unit type.
-const h264NalTypeIDR = 5 // IDR slice NAL unit type.
+const (
+	h264NalTypeSPS = 7
+	h264NalTypeIDR = 5
+)
 
-// h264ContainsIDR reports whether an Annex-B frame carries an IDR slice.
 func h264ContainsIDR(frame []byte) bool {
 
 	for _, nalu := range splitNALUs(frame) {
+
 		if len(nalu) > 0 && nalu[0]&0x1f == h264NalTypeIDR {
+
 			return true
 		}
+
 	}
 
 	return false
 
 }
 
-// rewriteH264SPS rewrites SPS VUI so Discord's decoder accepts the Annex-B frame.
 func rewriteH264SPS(frame []byte) []byte {
+
 	return rewriteH264SPSInto(nil, frame)
 }
 
-// rewriteH264SPSInto rewrites SPS VUI, reusing scratch when a new buffer is required.
 func rewriteH264SPSInto(scratch *[]byte, frame []byte) []byte {
 
 	nalus := splitNALUs(frame)
@@ -37,6 +39,7 @@ func rewriteH264SPSInto(scratch *[]byte, frame []byte) []byte {
 		if len(nalu) > 0 && nalu[0]&0x1f == h264NalTypeSPS {
 
 			if out := rewriteSPSVUI(nalu); out != nil {
+
 				nalus[i] = out
 				rewritten = true
 			}
@@ -46,23 +49,27 @@ func rewriteH264SPSInto(scratch *[]byte, frame []byte) []byte {
 	}
 
 	if !rewritten {
+
 		return frame
 	}
 
 	need := len(frame)
 
 	for _, nalu := range nalus {
+
 		need += len(startCode3) + len(nalu)
 	}
 
 	buf := growByteScratch(scratch, need)[:0]
 
 	for _, nalu := range nalus {
+
 		buf = append(buf, startCode3...)
 		buf = append(buf, nalu...)
 	}
 
 	if scratch != nil {
+
 		*scratch = buf
 	}
 
@@ -73,11 +80,13 @@ func rewriteH264SPSInto(scratch *[]byte, frame []byte) []byte {
 func growByteScratch(scratch *[]byte, need int) []byte {
 
 	if scratch == nil {
+
 		buf := make([]byte, 0, need)
 		return buf
 	}
 
 	if cap(*scratch) >= need {
+
 		return *scratch
 	}
 
@@ -87,7 +96,6 @@ func growByteScratch(scratch *[]byte, need int) []byte {
 
 }
 
-// splitNALUs splits an Annex-B buffer into its NAL units, stripping the 3- and 4-byte start codes.
 func splitNALUs(buf []byte) [][]byte {
 
 	var nalus [][]byte
@@ -99,6 +107,7 @@ func splitNALUs(buf []byte) [][]byte {
 		length := 3
 
 		if pos > 0 && temp[pos-1] == 0 {
+
 			pos--
 			length++
 		}
@@ -106,14 +115,17 @@ func splitNALUs(buf []byte) [][]byte {
 		var nalu []byte
 
 		if pos == -1 {
+
 			nalu = temp
 			temp = nil
 		} else {
+
 			nalu = temp[:pos]
 			temp = temp[pos+length:]
 		}
 
 		if len(nalu) > 0 {
+
 			nalus = append(nalus, nalu)
 		}
 
@@ -123,42 +135,45 @@ func splitNALUs(buf []byte) [][]byte {
 
 }
 
-// rewriteSPSVUI rewrites one SPS NAL, returning nil if it cannot be parsed.
 func rewriteSPSVUI(sps []byte) (out []byte) {
 
 	defer func() {
+
 		if recover() != nil {
+
 			out = nil
 		}
+
 	}()
 
 	reader := newBitReader(sps[1:])
 	writer := &bitWriter{}
 
-	// NAL header byte.
 	writer.writeBits(uint32(sps[0]), 8)
 
 	profileIDC := reader.readBits(8)
 	writer.writeBits(profileIDC, 8)
 
-	writer.writeBits(reader.readBits(8), 8) // constraint flags
-	writer.writeBits(reader.readBits(8), 8) // level_idc
+	writer.writeBits(reader.readBits(8), 8)
+	writer.writeBits(reader.readBits(8), 8)
 
-	writer.writeUE(reader.readUE()) // seq_parameter_set_id
+	writer.writeUE(reader.readUE())
 
 	switch profileIDC {
+
 	case 100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 144:
 
 		chromaFormatIDC := reader.readUE()
 		writer.writeUE(chromaFormatIDC)
 
 		if chromaFormatIDC == 3 {
-			writer.writeBits(reader.readBits(1), 1) // separate_colour_plane_flag
+
+			writer.writeBits(reader.readBits(1), 1)
 		}
 
-		writer.writeUE(reader.readUE())         // bit_depth_luma_minus8
-		writer.writeUE(reader.readUE())         // bit_depth_chroma_minus8
-		writer.writeBits(reader.readBits(1), 1) // qpprime_y_zero_transform_bypass_flag
+		writer.writeUE(reader.readUE())
+		writer.writeUE(reader.readUE())
+		writer.writeBits(reader.readBits(1), 1)
 
 		seqScalingMatrixPresent := reader.readBits(1)
 		writer.writeBits(seqScalingMatrixPresent, 1)
@@ -168,6 +183,7 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 			count := 8
 
 			if chromaFormatIDC == 3 {
+
 				count = 12
 			}
 
@@ -181,6 +197,7 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 					size := 64
 
 					if i < 6 {
+
 						size = 16
 					}
 
@@ -193,6 +210,7 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 						nextScale := (lastScale + delta + 256) % 256
 
 						if nextScale != 0 {
+
 							lastScale = nextScale
 						}
 
@@ -206,26 +224,27 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 
 	}
 
-	writer.writeUE(reader.readUE()) // log2_max_frame_num_minus4
+	writer.writeUE(reader.readUE())
 
 	picOrderCntType := reader.readUE()
 	writer.writeUE(picOrderCntType)
 
 	if picOrderCntType == 0 {
 
-		writer.writeUE(reader.readUE()) // log2_max_pic_order_cnt_lsb_minus4
+		writer.writeUE(reader.readUE())
 
 	} else if picOrderCntType == 1 {
 
-		writer.writeBits(reader.readBits(1), 1) // delta_pic_order_always_zero_flag
-		writer.writeSE(reader.readSE())         // offset_for_non_ref_pic
-		writer.writeSE(reader.readSE())         // offset_for_top_to_bottom_field
+		writer.writeBits(reader.readBits(1), 1)
+		writer.writeSE(reader.readSE())
+		writer.writeSE(reader.readSE())
 
 		num := reader.readUE()
 		writer.writeUE(num)
 
 		for i := 0; i < num; i++ {
-			writer.writeSE(reader.readSE()) // offset_for_ref_frame
+
+			writer.writeSE(reader.readSE())
 		}
 
 	}
@@ -233,38 +252,41 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 	maxNumRefFrames := reader.readUE()
 	writer.writeUE(maxNumRefFrames)
 
-	writer.writeBits(reader.readBits(1), 1) // gaps_in_frame_num_value_allowed_flag
-	writer.writeUE(reader.readUE())         // pic_width_in_mbs_minus1
-	writer.writeUE(reader.readUE())         // pic_height_in_map_units_minus1
+	writer.writeBits(reader.readBits(1), 1)
+	writer.writeUE(reader.readUE())
+	writer.writeUE(reader.readUE())
 
 	frameMbsOnly := reader.readBits(1)
 	writer.writeBits(frameMbsOnly, 1)
 
 	if frameMbsOnly == 0 {
-		writer.writeBits(reader.readBits(1), 1) // mb_adaptive_frame_field_flag
+
+		writer.writeBits(reader.readBits(1), 1)
 	}
 
-	writer.writeBits(reader.readBits(1), 1) // direct_8x8_inference_flag
+	writer.writeBits(reader.readBits(1), 1)
 
 	frameCropping := reader.readBits(1)
 	writer.writeBits(frameCropping, 1)
 
 	if frameCropping != 0 {
-		writer.writeUE(reader.readUE()) // frame_crop_left_offset
-		writer.writeUE(reader.readUE()) // frame_crop_right_offset
-		writer.writeUE(reader.readUE()) // frame_crop_top_offset
-		writer.writeUE(reader.readUE()) // frame_crop_bottom_offset
+
+		writer.writeUE(reader.readUE())
+		writer.writeUE(reader.readUE())
+		writer.writeUE(reader.readUE())
+		writer.writeUE(reader.readUE())
 	}
 
-	// addBitstreamRestriction writes the restriction defaults, forcing max_num_reorder_frames to 0.
+	// Forces max_num_reorder_frames to 0 so Discord's decoder accepts the stream.
 	addBitstreamRestriction := func() {
-		writer.writeBits(1, 1)          // motion_vectors_over_pic_boundaries_flag
-		writer.writeUE(2)               // max_bytes_per_pic_denom
-		writer.writeUE(1)               // max_bits_per_mb_denom
-		writer.writeUE(16)              // log2_max_mv_length_horizontal
-		writer.writeUE(16)              // log2_max_mv_length_vertical
-		writer.writeUE(0)               // max_num_reorder_frames
-		writer.writeUE(maxNumRefFrames) // max_dec_frame_buffering
+
+		writer.writeBits(1, 1)
+		writer.writeUE(2)
+		writer.writeUE(1)
+		writer.writeUE(16)
+		writer.writeUE(16)
+		writer.writeUE(0)
+		writer.writeUE(maxNumRefFrames)
 	}
 
 	vuiPresent := reader.readBits(1)
@@ -272,10 +294,10 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 
 	if vuiPresent == 0 {
 
-		writer.writeBits(0, 2) // aspect_ratio_info_present_flag, overscan_info_present_flag
-		writer.writeBits(0, 1) // video_signal_type_present_flag
-		writer.writeBits(0, 5) // chroma_loc/timing/nal_hrd/vcl_hrd/pic_struct present flags
-		writer.writeBits(1, 1) // bitstream_restriction_flag
+		writer.writeBits(0, 2)
+		writer.writeBits(0, 1)
+		writer.writeBits(0, 5)
+		writer.writeBits(1, 1)
 		addBitstreamRestriction()
 
 	} else {
@@ -289,8 +311,9 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 			writer.writeBits(aspectRatioIDC, 8)
 
 			if aspectRatioIDC == 255 {
-				writer.writeBits(reader.readBits(16), 16) // sar_width
-				writer.writeBits(reader.readBits(16), 16) // sar_height
+
+				writer.writeBits(reader.readBits(16), 16)
+				writer.writeBits(reader.readBits(16), 16)
 			}
 
 		}
@@ -299,7 +322,8 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 		writer.writeBits(overscanPresent, 1)
 
 		if overscanPresent != 0 {
-			writer.writeBits(reader.readBits(1), 1) // overscan_appropriate_flag
+
+			writer.writeBits(reader.readBits(1), 1)
 		}
 
 		// Read but drop the video signal type.
@@ -308,14 +332,15 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 
 		if videoSignalTypePresent != 0 {
 
-			reader.readBits(3) // video_format
-			reader.readBits(1) // video_full_range_flag
+			reader.readBits(3)
+			reader.readBits(1)
 			colourDescriptionPresent := reader.readBits(1)
 
 			if colourDescriptionPresent != 0 {
-				reader.readBits(8) // colour_primaries
-				reader.readBits(8) // transfer_characteristics
-				reader.readBits(8) // matrix_coeffs
+
+				reader.readBits(8)
+				reader.readBits(8)
+				reader.readBits(8)
 			}
 
 		}
@@ -324,23 +349,26 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 		writer.writeBits(chromaLocPresent, 1)
 
 		if chromaLocPresent != 0 {
-			writer.writeUE(reader.readUE()) // chroma_sample_loc_type_top_field
-			writer.writeUE(reader.readUE()) // chroma_sample_loc_type_bottom_field
+
+			writer.writeUE(reader.readUE())
+			writer.writeUE(reader.readUE())
 		}
 
 		timingInfoPresent := reader.readBits(1)
 		writer.writeBits(timingInfoPresent, 1)
 
 		if timingInfoPresent != 0 {
-			writer.writeBits(reader.readBits(32), 32) // num_units_in_tick
-			writer.writeBits(reader.readBits(32), 32) // time_scale
-			writer.writeBits(reader.readBits(1), 1)   // fixed_frame_rate_flag
+
+			writer.writeBits(reader.readBits(32), 32)
+			writer.writeBits(reader.readBits(32), 32)
+			writer.writeBits(reader.readBits(1), 1)
 		}
 
 		nalHRDPresent := reader.readBits(1)
 		writer.writeBits(nalHRDPresent, 1)
 
 		if nalHRDPresent != 0 {
+
 			copyHRDParameters(reader, writer)
 		}
 
@@ -348,14 +376,16 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 		writer.writeBits(vclHRDPresent, 1)
 
 		if vclHRDPresent != 0 {
+
 			copyHRDParameters(reader, writer)
 		}
 
 		if nalHRDPresent != 0 || vclHRDPresent != 0 {
-			writer.writeBits(reader.readBits(1), 1) // low_delay_hrd_flag
+
+			writer.writeBits(reader.readBits(1), 1)
 		}
 
-		writer.writeBits(reader.readBits(1), 1) // pic_struct_present_flag
+		writer.writeBits(reader.readBits(1), 1)
 
 		bitstreamRestriction := reader.readBits(1)
 		writer.writeBits(1, 1)
@@ -366,21 +396,21 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 
 		} else {
 
-			writer.writeBits(reader.readBits(1), 1) // motion_vectors_over_pic_boundaries_flag
-			writer.writeUE(reader.readUE())         // max_bytes_per_pic_denom
-			writer.writeUE(reader.readUE())         // max_bits_per_mb_denom
-			writer.writeUE(reader.readUE())         // log2_max_mv_length_horizontal
-			writer.writeUE(reader.readUE())         // log2_max_mv_length_vertical
-			reader.readUE()                         // num_reorder_frames (dropped)
+			writer.writeBits(reader.readBits(1), 1)
+			writer.writeUE(reader.readUE())
+			writer.writeUE(reader.readUE())
+			writer.writeUE(reader.readUE())
+			writer.writeUE(reader.readUE())
+			reader.readUE()
 			writer.writeUE(0)
-			reader.readUE() // max_dec_frame_buffering (dropped)
+			reader.readUE()
 			writer.writeUE(maxNumRefFrames)
 
 		}
 
 	}
 
-	writer.writeBits(1, 1) // rbsp_stop_one_bit
+	writer.writeBits(1, 1)
 	writer.flush()
 
 	return writer.toBuffer()
@@ -391,18 +421,19 @@ func copyHRDParameters(reader *bitReader, writer *bitWriter) {
 
 	cpbCntMinus1 := reader.readUE()
 	writer.writeUE(cpbCntMinus1)
-	writer.writeBits(reader.readBits(4), 4) // bit_rate_scale
-	writer.writeBits(reader.readBits(4), 4) // cpb_size_scale
+	writer.writeBits(reader.readBits(4), 4)
+	writer.writeBits(reader.readBits(4), 4)
 
 	for i := 0; i <= cpbCntMinus1; i++ {
-		writer.writeUE(reader.readUE())         // bit_rate_value_minus1
-		writer.writeUE(reader.readUE())         // cpb_size_value_minus1
-		writer.writeBits(reader.readBits(1), 1) // cbr_flag
+
+		writer.writeUE(reader.readUE())
+		writer.writeUE(reader.readUE())
+		writer.writeBits(reader.readBits(1), 1)
 	}
 
-	writer.writeBits(reader.readBits(5), 5) // initial_cpb_removal_delay_length_minus1
-	writer.writeBits(reader.readBits(5), 5) // cpb_removal_delay_length_minus1
-	writer.writeBits(reader.readBits(5), 5) // dpb_output_delay_length_minus1
-	writer.writeBits(reader.readBits(5), 5) // time_offset_length
+	writer.writeBits(reader.readBits(5), 5)
+	writer.writeBits(reader.readBits(5), 5)
+	writer.writeBits(reader.readBits(5), 5)
+	writer.writeBits(reader.readBits(5), 5)
 
 }

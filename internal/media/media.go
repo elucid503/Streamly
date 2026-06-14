@@ -15,47 +15,56 @@ import (
 	"streamly/internal/tvmaze"
 )
 
-const movie = febapi.BoxMovie // Showbox's discriminator for a movie.
+const movie = febapi.BoxMovie
 
-// Selection is a title resolved from a search hit or an autocomplete selection.
 type Selection struct {
-	ID      int
+
+	ID int
 	BoxType febapi.BoxType
+
 }
 
-// TitleDetails is user-facing metadata for a title.
 type TitleDetails struct {
-	Title         string
-	Year          string
-	Poster        string
-	Description   string
-	IMDBRating    string
-	TMDBId        int
-	IMDBId        string
+
+	Title string
+	Year string
+	Poster string
+	Description string
+
+	IMDBRating string
+
+	TMDBId int
+	IMDBId string
+
 	EpisodeTitles map[string]string
 }
 
-// Resolver bridges Showbox search, Febbox browsing, live TV, and episode metadata into what the bot needs to stream.
 type Resolver struct {
+
 	showbox *febapi.ShowboxClient
-	febbox  *febapi.FebboxClient
-	tv      *tvapi.TVClient
-	tvmaze  *tvmaze.Client
+	febbox *febapi.FebboxClient
+
+	tv *tvapi.TVClient
+	tvmaze *tvmaze.Client
+
 }
 
 func NewResolver() *Resolver {
 
 	return &Resolver{
+
 		showbox: febapi.NewShowboxClient(febapi.ShowboxOptions{}),
-		febbox:  febapi.NewFebboxClient(febapi.FebboxOptions{Cookie: config.App.FebboxCookie}),
-		tv:      tvapi.NewTVClient(tvapi.TVOptions{}),
-		tvmaze:  tvmaze.NewClient(),
+		febbox: febapi.NewFebboxClient(febapi.FebboxOptions{Cookie: config.App.FebboxCookie}),
+
+		tv: tvapi.NewTVClient(tvapi.TVOptions{}),
+		tvmaze: tvmaze.NewClient(),
+
 	}
 
 }
 
-// Warmup starts periodic live TV catalog refresh in the background.
 func (r *Resolver) Warmup() {
+
 	r.tv.Warmup()
 }
 
@@ -64,6 +73,7 @@ func (r *Resolver) Search(query string) ([]febapi.SearchResult, error) {
 	results, err := r.showbox.Search(query, febapi.MediaAll, 1, 25)
 
 	if err != nil {
+
 		return nil, err
 	}
 
@@ -78,21 +88,35 @@ func (r *Resolver) ResolveSelection(value string) (*Selection, error) {
 		boxType, _ := strconv.Atoi(encoded[1])
 		id, _ := strconv.Atoi(encoded[2])
 
-		return &Selection{ID: id, BoxType: febapi.BoxType(boxType)}, nil
+		return &Selection{
+
+			ID: id,
+			BoxType: febapi.BoxType(boxType),
+
+		}, nil
 
 	}
 
 	hits, err := r.showbox.Search(value, febapi.MediaAll, 1, 1)
 
 	if err != nil {
+
 		return nil, err
+
 	}
 
 	if len(hits) == 0 {
+
 		return nil, nil
+
 	}
 
-	return &Selection{ID: hits[0].ID, BoxType: hits[0].BoxType}, nil
+	return &Selection{
+
+		ID: hits[0].ID,
+		BoxType: hits[0].BoxType,
+
+	}, nil
 
 }
 
@@ -102,47 +126,61 @@ func (r *Resolver) Details(selection Selection) (TitleDetails, error) {
 	var err error
 
 	if r.IsMovie(selection) {
+
 		raw, err = r.showbox.GetMovie(selection.ID)
+
 	} else {
+
 		raw, err = r.showbox.GetShow(selection.ID)
 	}
 
 	if err != nil {
+
 		return TitleDetails{}, err
+
 	}
 
 	text := func(key string) string {
+
 		value, ok := raw[key]
 		if !ok || value == nil || value == "" {
+
 			return ""
 		}
+
 		return febapi.DecodeText(fmt.Sprint(value))
 	}
 
 	return TitleDetails{
-		Title:         fallback(text("title"), "Unknown title"),
-		Year:          text("year"),
-		Poster:        fallback(text("poster"), fallback(text("poster_org"), text("poster_min"))),
-		Description:   text("description"),
-		IMDBRating:    text("imdb_rating"),
-		TMDBId:        intFromAny(raw["tmdb_id"]),
-		IMDBId:        text("imdb_id"),
+
+		TMDBId: intFromAny(raw["tmdb_id"]),
+		IMDBId: text("imdb_id"),
+
+		Title: fallback(text("title"), "Unknown title"),
+		Year: text("year"),
+
+		Poster: fallback(text("poster"), fallback(text("poster_org"), text("poster_min"))),
+		Description: text("description"),
+
+		IMDBRating: text("imdb_rating"),
+
 		EpisodeTitles: episodeTitleMap(raw),
+
 	}, nil
 
 }
 
-// EpisodeList fetches per-episode titles for a TV season via TVmaze, keyed by the show's IMDB ID.
-// Returns nil when the IMDB ID is empty or the show/season is not found.
 func (r *Resolver) EpisodeList(imdbID string, season int) map[int]string {
 
 	if imdbID == "" {
+
 		return nil
 	}
 
 	titles, err := r.tvmaze.EpisodeTitles(imdbID, season)
 
 	if err != nil || len(titles) == 0 {
+
 		return nil
 	}
 
@@ -167,9 +205,12 @@ func (r *Resolver) Files(entries []febapi.FebboxFile) []febapi.FebboxFile {
 	var files []febapi.FebboxFile
 
 	for _, entry := range entries {
+
 		if entry.IsDir == 0 {
+
 			files = append(files, entry)
 		}
+
 	}
 
 	sort.Slice(files, func(i, j int) bool { return byName(files[i], files[j]) })
@@ -183,9 +224,12 @@ func (r *Resolver) Seasons(entries []febapi.FebboxFile) []febapi.FebboxFile {
 	var seasons []febapi.FebboxFile
 
 	for _, entry := range entries {
+
 		if entry.IsDir == 1 {
+
 			seasons = append(seasons, entry)
 		}
+
 	}
 
 	sort.Slice(seasons, func(i, j int) bool { return byName(seasons[i], seasons[j]) })
@@ -205,30 +249,35 @@ func (r *Resolver) MovieFile(shareKey string) (*febapi.FebboxFile, error) {
 	root, err := r.ListChildren(shareKey, 0)
 
 	if err != nil {
+
 		return nil, err
 	}
 
 	direct := r.Files(root)
 
 	if len(direct) > 0 {
+
 		return &direct[0], nil
 	}
 
 	seasons := r.Seasons(root)
 
 	if len(seasons) == 0 {
+
 		return nil, nil
 	}
 
 	children, err := r.ListChildren(shareKey, seasons[0].FID)
 
 	if err != nil {
+
 		return nil, err
 	}
 
 	files := r.Files(children)
 
 	if len(files) == 0 {
+
 		return nil, nil
 	}
 
@@ -241,12 +290,14 @@ func (r *Resolver) StreamURL(shareKey string, fid int, target int) (string, erro
 	qualities, err := r.febbox.GetLinks(shareKey, fid, "")
 
 	if err != nil {
+
 		return "", err
 	}
 
 	picked := PickQuality(qualities, target)
 
 	if picked == nil {
+
 		return "", nil
 	}
 
@@ -259,6 +310,7 @@ func (r *Resolver) Qualities(shareKey string, fid int) ([]febapi.FileQuality, er
 	qualities, err := r.febbox.GetLinks(shareKey, fid, "")
 
 	if err != nil {
+
 		return nil, err
 	}
 
@@ -273,15 +325,18 @@ func QualityHeight(quality febapi.FileQuality) int {
 	label := quality.Quality + " " + quality.Name
 
 	if regexp.MustCompile(`(?i)2160|4k`).MatchString(label) {
+
 		return 2160
 	}
 
 	if match := regexp.MustCompile(`(\d{3,4})\s*p`).FindStringSubmatch(label); len(match) > 1 {
+
 		height, _ := strconv.Atoi(match[1])
 		return height
 	}
 
 	if regexp.MustCompile(`(?i)org|origin`).MatchString(label) {
+
 		return math.MaxInt
 	}
 
@@ -289,24 +344,26 @@ func QualityHeight(quality febapi.FileQuality) int {
 
 }
 
-// PickQuality chooses the source closest to the target height. Progressive files are
-// preferred over HLS playlists: they stream through the byte-seekable pipeline, which
-// is what makes /seek work (libav 6.1's HLS demuxer corrupts fMP4 streams on seek).
 func PickQuality(qualities []febapi.FileQuality, target int) *febapi.FileQuality {
 
 	if len(qualities) == 0 {
+
 		return nil
 	}
 
 	progressive := make([]febapi.FileQuality, 0, len(qualities))
 
 	for _, quality := range qualities {
+
 		if quality.URL != "" && !source.IsHlsURL(quality.URL) {
+
 			progressive = append(progressive, quality)
 		}
+
 	}
 
 	if len(progressive) > 0 {
+
 		qualities = progressive
 	}
 
@@ -314,9 +371,12 @@ func PickQuality(qualities []febapi.FileQuality, target int) *febapi.FileQuality
 	sort.Slice(sorted, func(i, j int) bool { return QualityHeight(sorted[i]) < QualityHeight(sorted[j]) })
 
 	for i := range sorted {
+
 		if QualityHeight(sorted[i]) >= target {
+
 			return &sorted[i]
 		}
+
 	}
 
 	return &sorted[len(sorted)-1]
@@ -334,6 +394,7 @@ func episodeTitleMap(raw map[string]any) map[string]string {
 	episodes, ok := raw["episode"].([]any)
 
 	if !ok {
+
 		return nil
 	}
 
@@ -344,6 +405,7 @@ func episodeTitleMap(raw map[string]any) map[string]string {
 		data, ok := item.(map[string]any)
 
 		if !ok {
+
 			continue
 		}
 
@@ -352,12 +414,14 @@ func episodeTitleMap(raw map[string]any) map[string]string {
 		title := febapi.DecodeText(fmt.Sprint(data["title"]))
 
 		if season > 0 && number > 0 && title != "" {
+
 			titles[fmt.Sprintf("%d:%d", int(season), int(number))] = title
 		}
 
 	}
 
 	if len(titles) == 0 {
+
 		return nil
 	}
 
@@ -368,9 +432,12 @@ func episodeTitleMap(raw map[string]any) map[string]string {
 func fallback(values ...string) string {
 
 	for _, value := range values {
+
 		if value != "" {
+
 			return value
 		}
+
 	}
 
 	return ""
@@ -380,17 +447,28 @@ func fallback(values ...string) string {
 func intFromAny(value any) int {
 
 	switch typed := value.(type) {
+
 	case int:
+
 		return typed
+
 	case int64:
+
 		return int(typed)
+
 	case float64:
+
 		return int(typed)
+
 	case string:
+
 		parsed, _ := strconv.Atoi(strings.TrimSpace(typed))
 		return parsed
+
 	default:
+
 		return 0
+
 	}
 
 }

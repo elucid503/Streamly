@@ -16,18 +16,22 @@ func TestListChannelsIntegration(t *testing.T) {
 	catalog, err := client.ListChannels()
 
 	if err != nil {
+
 		t.Fatalf("ListChannels: %v", err)
 	}
 
 	if catalog.Total <= 0 {
+
 		t.Fatalf("catalog total = %d, want > 0", catalog.Total)
 	}
 
 	if len(catalog.Channels) == 0 {
+
 		t.Fatal("catalog channels is empty")
 	}
 
 	if catalog.Channels[0].DaddyID == "" {
+
 		t.Fatal("first channel missing daddyId")
 	}
 
@@ -40,6 +44,7 @@ func TestResolveHLSIntegration(t *testing.T) {
 	catalog, err := client.ListChannels()
 
 	if err != nil {
+
 		t.Fatalf("ListChannels: %v", err)
 	}
 
@@ -48,12 +53,14 @@ func TestResolveHLSIntegration(t *testing.T) {
 	for _, slug := range []string{"espn-usa", "cnn-usa", "abc-usa", "fox-usa"} {
 
 		if channel, ok := catalog.FindBySlug(slug); ok {
+
 			targets = append(targets, channel.DaddyID)
 		}
 
 	}
 
 	if len(targets) == 0 {
+
 		targets = append(targets, catalog.Channels[0].DaddyID)
 	}
 
@@ -64,20 +71,24 @@ func TestResolveHLSIntegration(t *testing.T) {
 			stream, err := client.ResolveStream(daddyID)
 
 			if err != nil {
+
 				t.Fatalf("ResolveStream: %v", err)
 			}
 
 			if !isHLSPlaylistURL(stream.URL) {
+
 				t.Fatalf("unexpected HLS URL: %s", stream.URL)
 			}
 
 			playlist, err := fetchIntegrationPlaylist(stream.URL, stream.Referer)
 
 			if err != nil {
+
 				t.Fatalf("fetch playlist: %v", err)
 			}
 
 			if !strings.HasPrefix(playlist, "#EXTM3U") {
+
 				t.Fatalf("playlist does not look like HLS: %q", truncateIntegration(playlist, 120))
 			}
 
@@ -94,6 +105,7 @@ func fetchIntegrationPlaylist(rawURL, referer string) (string, error) {
 	request, err := http.NewRequest(http.MethodGet, rawURL, nil)
 
 	if err != nil {
+
 		return "", err
 	}
 
@@ -101,26 +113,32 @@ func fetchIntegrationPlaylist(rawURL, referer string) (string, error) {
 	request.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
 	if referer != "" {
+
 		request.Header.Set("Referer", referer)
+
 	} else if strings.HasPrefix(rawURL, defaultBaseURL) {
+
 		request.Header.Set("Referer", defaultBaseURL+"/")
 	}
 
 	response, err := client.Do(request)
 
 	if err != nil {
+
 		return "", err
 	}
 
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
+
 		return "", fmt.Errorf("status %d", response.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(response.Body, 64*1024))
 
 	if err != nil {
+
 		return "", err
 	}
 
@@ -131,6 +149,7 @@ func fetchIntegrationPlaylist(rawURL, referer string) (string, error) {
 func truncateIntegration(value string, max int) string {
 
 	if len(value) <= max {
+
 		return value
 	}
 

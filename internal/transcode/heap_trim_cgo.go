@@ -17,5 +17,6 @@ static void streamly_trim_heap(void) {
 import "C"
 
 func trimNativeHeap() {
+
 	C.streamly_trim_heap()
 }

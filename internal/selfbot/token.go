@@ -5,12 +5,12 @@ import (
 	"strings"
 )
 
-// sanitizeToken strips bot/bearer prefixes and rejects empty tokens.
 func sanitizeToken(token string) (string, error) {
 
 	token = strings.TrimSpace(token)
 
 	if token == "" {
+
 		return "", fmt.Errorf("TOKEN_INVALID")
 	}
 
@@ -20,6 +20,7 @@ func sanitizeToken(token string) (string, error) {
 	token = strings.TrimPrefix(token, "bearer ")
 
 	if token == "" {
+
 		return "", fmt.Errorf("TOKEN_INVALID")
 	}
 

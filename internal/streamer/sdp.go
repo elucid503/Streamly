@@ -8,17 +8,18 @@ import (
 	pionsdp "github.com/pion/sdp/v3"
 )
 
-// extractAckSDP pulls the answer SDP out of a SELECT_PROTOCOL_ACK payload.
 func extractAckSDP(data json.RawMessage) string {
 
 	var ack struct {
-		SDP  string `json:"sdp"`
-		Data string `json:"data"`
+
+		SDP string`json:"sdp"`
+		Data string`json:"data"`
 	}
 
 	_ = json.Unmarshal(data, &ack)
 
 	if sdp := strings.TrimSpace(ack.SDP); sdp != "" {
+
 		return sdp
 	}
 
@@ -26,12 +27,12 @@ func extractAckSDP(data json.RawMessage) string {
 
 }
 
-// prepareRemoteSDP returns an SDP answer pion can parse.
 func prepareRemoteSDP(sdp string) string {
 
 	sdp = strings.TrimSpace(normalizeSDPLines(sdp))
 
 	if sdp == "" {
+
 		return ""
 	}
 
@@ -52,10 +53,12 @@ func finalizeSDP(sdp string) string {
 	sdp = strings.TrimSpace(sdp)
 
 	if sdp == "" {
+
 		return ""
 	}
 
 	if !strings.HasSuffix(sdp, "\r\n") {
+
 		sdp += "\r\n"
 	}
 
@@ -72,7 +75,6 @@ func normalizeSDPLines(sdp string) string {
 
 }
 
-// rewriteDiscordSDP rebuilds Discord's answer into the shape expected by pion.
 func rewriteDiscordSDP(sdp string) string {
 
 	var ip, port, iceUsername, icePassword, fingerprint, candidate string
@@ -82,20 +84,25 @@ func rewriteDiscordSDP(sdp string) string {
 		line = strings.TrimSpace(line)
 
 		switch {
+
 		case strings.HasPrefix(line, "c="):
 			ip = line
 		case strings.HasPrefix(line, "m=audio"):
 			fields := strings.Fields(line)
 
 			if len(fields) >= 2 && port == "" {
+
 				port = fields[1]
 			}
+
 		case strings.HasPrefix(line, "a=rtcp"):
 			parts := strings.SplitN(line, ":", 2)
 
 			if len(parts) == 2 && port == "" {
+
 				port = strings.TrimSpace(parts[1])
 			}
+
 		case strings.HasPrefix(line, "a=ice-ufrag"):
 			iceUsername = line
 		case strings.HasPrefix(line, "a=ice-pwd"):
@@ -104,17 +111,21 @@ func rewriteDiscordSDP(sdp string) string {
 			fingerprint = line
 		case strings.HasPrefix(line, "a=candidate"):
 			if candidate == "" {
+
 				candidate = line
 			}
+
 		}
 
 	}
 
 	if port == "" {
+
 		port = "9"
 	}
 
 	if ip == "" {
+
 		ip = "c=IN IP4 127.0.0.1"
 	}
 
@@ -175,6 +186,7 @@ a=rtcp-fb:%d transport-cc`,
 		CodecH264.PayloadType, CodecH264.PayloadType, CodecH264.PayloadType, CodecH264.PayloadType, CodecH264.PayloadType)
 
 	return strings.Join([]string{
+
 		"v=0",
 		"o=- 0 0 IN IP4 127.0.0.1",
 		"s=-",

@@ -12,43 +12,49 @@ import (
 )
 
 var subtitleExtensions = map[string]struct{}{
+
 	".srt": {},
 	".vtt": {},
 	".ass": {},
 	".ssa": {},
+
 }
 
-// FebboxScanner looks for sidecar subtitle files in a Febbox share folder.
 type FebboxScanner struct {
+
 	client *febapi.FebboxClient
+
 }
 
-// NewFebboxScanner builds a FebboxScanner backed by client.
 func NewFebboxScanner(client *febapi.FebboxClient) *FebboxScanner {
 
 	return &FebboxScanner{client: client}
 
 }
 
-// SidecarMatch is a subtitle file discovered beside a Febbox video.
 type SidecarMatch struct {
-	FID      int
+
+	FID int
 	FileName string
+
 }
 
-// Find scans the folder containing videoFID for a matching subtitle file.
 func (s *FebboxScanner) Find(ctx context.Context, shareKey string, videoFID int, videoName string) (*SidecarMatch, error) {
 
 	parent, err := parentFolderForFile(s.client, shareKey, 0, videoFID)
 
 	if err != nil {
+
 		return nil, err
+
 	}
 
 	entries, err := s.client.ListFiles(shareKey, parent, "")
 
 	if err != nil {
+
 		return nil, err
+
 	}
 
 	base := strings.TrimSuffix(videoName, filepath.Ext(videoName))
@@ -57,23 +63,31 @@ func (s *FebboxScanner) Find(ctx context.Context, shareKey string, videoFID int,
 	for _, entry := range entries {
 
 		if entry.IsDir != 0 || entry.FID == videoFID {
+
 			continue
+
 		}
 
 		ext := strings.ToLower(filepath.Ext(entry.FileName))
 
 		if _, ok := subtitleExtensions[ext]; !ok {
+
 			continue
+
 		}
 
 		if hasForeignLanguageName(entry.FileName) {
+
 			continue
+
 		}
 
 		match := &SidecarMatch{FID: entry.FID, FileName: entry.FileName}
 
 		if normalizeName(strings.TrimSuffix(entry.FileName, ext)) == baseKey {
+
 			return match, nil
+
 		}
 
 	}
@@ -82,33 +96,42 @@ func (s *FebboxScanner) Find(ctx context.Context, shareKey string, videoFID int,
 
 }
 
-// Download writes a discovered sidecar subtitle to destPath.
 func (s *FebboxScanner) Download(ctx context.Context, shareKey string, match *SidecarMatch, destPath string, headers map[string]string) (string, error) {
 
 	qualities, err := s.client.GetLinks(shareKey, match.FID, "")
 
 	if err != nil || len(qualities) == 0 || qualities[0].URL == "" {
+
 		return "", ErrNoSubtitle
+
 	}
 
 	data, err := downloadURL(ctx, qualities[0].URL, headers)
 
 	if err != nil {
+
 		return "", err
+
 	}
 
 	payload, err := extractSubtitle(data, 0, 0)
 
 	if err != nil {
+
 		return "", err
+
 	}
 
 	if !looksEnglishSubtitle(payload) {
+
 		return "", ErrNoSubtitle
+
 	}
 
 	if _, err := WriteBurnInSubtitle(destPath, payload); err != nil {
+
 		return "", err
+
 	}
 
 	return fmt.Sprintf("Febbox sidecar (%s)", match.FileName), nil
@@ -120,23 +143,31 @@ func downloadURL(ctx context.Context, url string, headers map[string]string) ([]
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 
 	if err != nil {
+
 		return nil, err
+
 	}
 
 	for key, value := range headers {
+
 		request.Header.Set(key, value)
+
 	}
 
 	response, err := http.DefaultClient.Do(request)
 
 	if err != nil {
+
 		return nil, err
+
 	}
 
 	defer response.Body.Close()
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+
 		return nil, fmt.Errorf("captions: download failed with status %d", response.StatusCode)
+
 	}
 
 	return io.ReadAll(response.Body)
@@ -148,23 +179,31 @@ func parentFolderForFile(client *febapi.FebboxClient, shareKey string, parentID 
 	entries, err := client.ListFiles(shareKey, parentID, "")
 
 	if err != nil {
+
 		return 0, err
+
 	}
 
 	for _, entry := range entries {
 
 		if entry.FID == wantedFID {
+
 			return parentID, nil
+
 		}
 
 		if entry.IsDir == 0 {
+
 			continue
+
 		}
 
 		found, err := parentFolderForFile(client, shareKey, entry.FID, wantedFID)
 
 		if err == nil {
+
 			return found, nil
+
 		}
 
 	}

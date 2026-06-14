@@ -10,23 +10,23 @@ import (
 	"streamly/internal/selfbot"
 )
 
-// Gateway opcodes the streamer sends on the main gateway websocket.
 const (
 	gwVoiceStateUpdate = 4
-	gwStreamCreate     = 18
-	gwStreamDelete     = 19
-	gwStreamSetPaused  = 22
+	gwStreamCreate = 18
+	gwStreamDelete = 19
+	gwStreamSetPaused = 22
 )
 
 const voiceJoinTimeout = 45 * time.Second
 
-// Streamer wraps a minimal selfbot client and owns the active voice connection.
 type Streamer struct {
+
 	client *selfbot.Client
 
-	mu              sync.Mutex
+	mu sync.Mutex
 	voiceConnection *VoiceConnection
-	onVoiceLeave    func()
+	onVoiceLeave func()
+
 }
 
 func New(client *selfbot.Client) *Streamer {
@@ -44,6 +44,7 @@ func (s *Streamer) listen() {
 	for event := range s.client.Events() {
 
 		switch event.Type {
+
 		case "VOICE_STATE_UPDATE":
 			s.onVoiceStateUpdate(event.Data)
 		case "VOICE_SERVER_UPDATE":
@@ -61,14 +62,17 @@ func (s *Streamer) listen() {
 func (s *Streamer) onVoiceStateUpdate(data json.RawMessage) {
 
 	var payload struct {
-		UserID    string  `json:"user_id"`
-		ChannelID *string `json:"channel_id"`
-		SessionID string  `json:"session_id"`
+
+		UserID string`json:"user_id"`
+		ChannelID *string`json:"channel_id"`
+
+		SessionID string`json:"session_id"`
 	}
 
 	_ = json.Unmarshal(data, &payload)
 
 	if payload.UserID != s.client.UserID() {
+
 		return
 	}
 
@@ -78,6 +82,7 @@ func (s *Streamer) onVoiceStateUpdate(data json.RawMessage) {
 	callback := s.onVoiceLeave
 
 	if conn != nil {
+
 		conn.setSession(payload.SessionID)
 	}
 
@@ -86,12 +91,12 @@ func (s *Streamer) onVoiceStateUpdate(data json.RawMessage) {
 	leftChannel := payload.ChannelID == nil || *payload.ChannelID == ""
 
 	if hadConnection && leftChannel && callback != nil {
+
 		callback()
 	}
 
 }
 
-// SetOnVoiceLeave registers a callback for unexpected voice disconnects.
 func (s *Streamer) SetOnVoiceLeave(fn func()) {
 
 	s.mu.Lock()
@@ -104,10 +109,12 @@ func (s *Streamer) SetOnVoiceLeave(fn func()) {
 func (s *Streamer) onVoiceServerUpdate(data json.RawMessage) {
 
 	var payload struct {
-		Token     string  `json:"token"`
-		Endpoint  string  `json:"endpoint"`
-		GuildID   *string `json:"guild_id"`
-		ChannelID *string `json:"channel_id"`
+
+		Token string`json:"token"`
+		Endpoint string`json:"endpoint"`
+
+		GuildID *string`json:"guild_id"`
+		ChannelID *string`json:"channel_id"`
 	}
 
 	_ = json.Unmarshal(data, &payload)
@@ -117,14 +124,17 @@ func (s *Streamer) onVoiceServerUpdate(data json.RawMessage) {
 	s.mu.Unlock()
 
 	if conn == nil {
+
 		return
 	}
 
 	if payload.GuildID != nil && conn.guildID != nil && *payload.GuildID != *conn.guildID {
+
 		return
 	}
 
 	if payload.ChannelID != nil && *payload.ChannelID != conn.channelID {
+
 		return
 	}
 
@@ -135,8 +145,9 @@ func (s *Streamer) onVoiceServerUpdate(data json.RawMessage) {
 func (s *Streamer) onStreamCreate(data json.RawMessage) {
 
 	var payload struct {
-		StreamKey   string `json:"stream_key"`
-		RTCServerID string `json:"rtc_server_id"`
+
+		StreamKey string`json:"stream_key"`
+		RTCServerID string`json:"rtc_server_id"`
 	}
 
 	_ = json.Unmarshal(data, &payload)
@@ -146,16 +157,19 @@ func (s *Streamer) onStreamCreate(data json.RawMessage) {
 	s.mu.Unlock()
 
 	if conn == nil || conn.streamConnection == nil {
+
 		return
 	}
 
 	guildID, channelID, userID, _, err := parseStreamKey(payload.StreamKey)
 
 	if err != nil {
+
 		return
 	}
 
 	if conn.guildIDString() != guildID || conn.channelID != channelID || s.client.UserID() != userID {
+
 		return
 	}
 
@@ -168,9 +182,10 @@ func (s *Streamer) onStreamCreate(data json.RawMessage) {
 func (s *Streamer) onStreamServerUpdate(data json.RawMessage) {
 
 	var payload struct {
-		StreamKey string `json:"stream_key"`
-		Token     string `json:"token"`
-		Endpoint  string `json:"endpoint"`
+
+		StreamKey string`json:"stream_key"`
+		Token string`json:"token"`
+		Endpoint string`json:"endpoint"`
 	}
 
 	_ = json.Unmarshal(data, &payload)
@@ -180,16 +195,19 @@ func (s *Streamer) onStreamServerUpdate(data json.RawMessage) {
 	s.mu.Unlock()
 
 	if conn == nil || conn.streamConnection == nil {
+
 		return
 	}
 
 	guildID, channelID, userID, _, err := parseStreamKey(payload.StreamKey)
 
 	if err != nil {
+
 		return
 	}
 
 	if conn.guildIDString() != guildID || conn.channelID != channelID || s.client.UserID() != userID {
+
 		return
 	}
 
@@ -197,14 +215,15 @@ func (s *Streamer) onStreamServerUpdate(data json.RawMessage) {
 
 }
 
-// JoinVoice joins a guild or DM voice channel and waits for the WebRTC session.
 func (s *Streamer) JoinVoice(ctx context.Context, guildID, channelID string) (*MediaPeer, error) {
 
 	if s.client.UserID() == "" {
+
 		return nil, fmt.Errorf("client not logged in")
 	}
 
 	if _, ok := ctx.Deadline(); !ok {
+
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, voiceJoinTimeout)
 		defer cancel()
@@ -215,6 +234,7 @@ func (s *Streamer) JoinVoice(ctx context.Context, guildID, channelID string) (*M
 	var guildPtr *string
 
 	if guildID != "" {
+
 		guildPtr = &guildID
 	}
 
@@ -225,14 +245,16 @@ func (s *Streamer) JoinVoice(ctx context.Context, guildID, channelID string) (*M
 	s.mu.Unlock()
 
 	_ = s.client.Send(gwVoiceStateUpdate, map[string]any{
-		"guild_id":   guildPtr,
+
+		"guild_id": guildPtr,
 		"channel_id": channelID,
-		"self_mute":  false,
-		"self_deaf":  true,
+		"self_mute": false,
+		"self_deaf": true,
 		"self_video": false,
 	})
 
 	select {
+
 	case <-ready:
 		return nil, nil
 	case <-ctx.Done():
@@ -241,7 +263,6 @@ func (s *Streamer) JoinVoice(ctx context.Context, guildID, channelID string) (*M
 
 }
 
-// CreateStream starts a Go Live stream on the active voice connection.
 func (s *Streamer) CreateStream(ctx context.Context) (*StreamConnection, error) {
 
 	s.mu.Lock()
@@ -249,10 +270,12 @@ func (s *Streamer) CreateStream(ctx context.Context) (*StreamConnection, error) 
 	s.mu.Unlock()
 
 	if conn == nil {
+
 		return nil, fmt.Errorf("not connected to a voice channel")
 	}
 
 	if _, ok := ctx.Deadline(); !ok {
+
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, voiceJoinTimeout)
 		defer cancel()
@@ -265,8 +288,10 @@ func (s *Streamer) CreateStream(ctx context.Context) (*StreamConnection, error) 
 	s.signalStream(conn)
 
 	select {
+
 	case peer := <-ready:
 		if peer == nil {
+
 			return nil, fmt.Errorf("stream connection failed")
 		}
 
@@ -280,22 +305,23 @@ func (s *Streamer) CreateStream(ctx context.Context) (*StreamConnection, error) 
 func (s *Streamer) signalStream(conn *VoiceConnection) {
 
 	_ = s.client.Send(gwStreamCreate, map[string]any{
-		"type":             conn.streamType(),
-		"guild_id":         conn.guildID,
-		"channel_id":       conn.channelID,
+
+		"type": conn.streamType(),
+		"guild_id": conn.guildID,
+		"channel_id": conn.channelID,
 		"preferred_region": nil,
 	})
 
 	streamKey := generateStreamKey(conn.guildID == nil, conn.guildIDString(), conn.channelID, conn.botID)
 
 	_ = s.client.Send(gwStreamSetPaused, map[string]any{
+
 		"stream_key": streamKey,
-		"paused":     false,
+		"paused": false,
 	})
 
 }
 
-// StopStream tears down the active Go Live session.
 func (s *Streamer) StopStream() {
 
 	s.mu.Lock()
@@ -303,6 +329,7 @@ func (s *Streamer) StopStream() {
 	s.mu.Unlock()
 
 	if conn == nil || conn.streamConnection == nil {
+
 		return
 	}
 
@@ -315,7 +342,6 @@ func (s *Streamer) StopStream() {
 
 }
 
-// LeaveVoice disconnects from voice and clears local state.
 func (s *Streamer) LeaveVoice() {
 
 	s.mu.Lock()
@@ -324,20 +350,21 @@ func (s *Streamer) LeaveVoice() {
 	s.mu.Unlock()
 
 	if conn != nil {
+
 		conn.stop()
 	}
 
 	_ = s.client.Send(gwVoiceStateUpdate, map[string]any{
-		"guild_id":   nil,
+
+		"guild_id": nil,
 		"channel_id": nil,
-		"self_mute":  true,
-		"self_deaf":  false,
+		"self_mute": true,
+		"self_deaf": false,
 		"self_video": false,
 	})
 
 }
 
-// VoiceConnection returns the active voice connection, if any.
 func (s *Streamer) VoiceConnection() *VoiceConnection {
 
 	s.mu.Lock()

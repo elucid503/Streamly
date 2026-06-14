@@ -24,22 +24,31 @@ bool disableVideoPacing() {
 }
 
 struct TrackState {
+
 	std::shared_ptr<rtc::Track> track;
 	std::shared_ptr<rtc::RtpPacketizationConfig> rtpConfig;
+
 };
 
 struct StreamlyPeerImpl {
+
 	std::shared_ptr<rtc::PeerConnection> pc;
+
 	TrackState audio;
 	TrackState video;
+
 	StreamlyDescriptionCallback onDescription = nullptr;
 	uint64_t descriptionUser = 0;
+
 	std::mutex mu;
 	bool closed = false;
+
 };
 
 struct StreamlyPeerHandle {
+
 	std::shared_ptr<StreamlyPeerImpl> impl;
+
 };
 
 StreamlyPeerImpl *asImpl(StreamlyPeer *peer) {
@@ -47,7 +56,9 @@ StreamlyPeerImpl *asImpl(StreamlyPeer *peer) {
 	auto handle = reinterpret_cast<StreamlyPeerHandle *>(peer);
 
 	if (handle == nullptr || handle->impl == nullptr) {
+
 		return nullptr;
+
 	}
 
 	return handle->impl.get();
@@ -109,11 +120,14 @@ void setupVideoPacketizer(StreamlyPeerImpl *peer, uint32_t ssrc, int payloadType
 	rtpConfig->playoutDelayMax = playoutMax;
 
 	auto packetizer = std::make_shared<rtc::H264RtpPacketizer>(rtc::NalUnit::Separator::StartSequence, rtpConfig);
+
 	packetizer->addToChain(std::make_shared<rtc::RtcpSrReporter>(rtpConfig));
 	packetizer->addToChain(std::make_shared<rtc::RtcpNackResponder>());
 
 	if (!disableVideoPacing()) {
+
 		packetizer->addToChain(std::make_shared<rtc::PacingHandler>(kVideoPacingMbps, std::chrono::milliseconds(kVideoPacingIntervalMs)));
+
 	}
 
 	peer->video.rtpConfig = rtpConfig;
@@ -121,22 +135,27 @@ void setupVideoPacketizer(StreamlyPeerImpl *peer, uint32_t ssrc, int payloadType
 
 }
 
-// sendTrackFrame fires one frame at the track when the PeerConnection is connected, matching
-// discord-video-stream: it does not gate on track->isOpen() (Discord answers with a=inactive) nor
-// surface backpressure (the caller paces frames). Returns 1 when the send was attempted, 0 otherwise.
+// sendTrackFrame fires one frame at the track when the PeerConnection is connected, matching discord-video-stream's behavior.
 int sendTrackFrame(const std::shared_ptr<rtc::Track> &track, const std::shared_ptr<rtc::PeerConnection> &pc, const uint8_t *data, size_t len) {
 
 	if (track == nullptr || pc == nullptr || data == nullptr || len == 0) {
+
 		return 0;
+
 	}
 
 	if (pc->state() != rtc::PeerConnection::State::Connected) {
+
 		return 0;
+
 	}
 
 	try {
+
 		track->send(reinterpret_cast<const rtc::byte *>(data), len);
+
 	} catch (const std::exception &) {
+
 	}
 
 	return 1;
@@ -163,11 +182,14 @@ StreamlyPeer *streamly_peer_create(const char *stun_url) {
 		impl->pc->onLocalDescription([impl](rtc::Description description) {
 
 			if (impl->closed || impl->onDescription == nullptr) {
+
 				return;
+
 			}
 
 			const std::string sdp = std::string(description);
 			const int type = description.type() == rtc::Description::Type::Answer ? STREAMLY_DESC_ANSWER : STREAMLY_DESC_OFFER;
+
 			impl->onDescription(impl->descriptionUser, sdp.c_str(), type);
 
 		});
@@ -178,7 +200,9 @@ StreamlyPeer *streamly_peer_create(const char *stun_url) {
 		return reinterpret_cast<StreamlyPeer *>(handle);
 
 	} catch (...) {
+
 		return nullptr;
+
 	}
 
 }
@@ -186,7 +210,9 @@ StreamlyPeer *streamly_peer_create(const char *stun_url) {
 void streamly_peer_destroy(StreamlyPeer *peer) {
 
 	if (peer == nullptr) {
+
 		return;
+
 	}
 
 	streamly_peer_close(peer);
@@ -211,12 +237,12 @@ void streamly_peer_close(StreamlyPeer *peer) {
 	impl->closed = true;
 	clearCallbacks(impl);
 
-	// Match discord-video-stream's teardown: close the PeerConnection (which closes its tracks and
-	// stops the media-handler threads) and let RAII drop the rest. Closing tracks separately as well
-	// races those handler threads during destruction.
+	// Match discord-video-stream's teardown: close the PeerConnection (which closes its tracks and ends the RTP streams) before clearing track and RTP config references.
 	if (impl->pc != nullptr) {
+
 		impl->pc->close();
 		impl->pc.reset();
+
 	}
 
 	impl->audio.track.reset();
@@ -244,7 +270,9 @@ int streamly_peer_add_audio(StreamlyPeer *peer, uint32_t ssrc, int payload_type)
 	auto impl = asImpl(peer);
 
 	if (impl == nullptr || impl->pc == nullptr) {
+
 		return 0;
+
 	}
 
 	try {
@@ -259,7 +287,9 @@ int streamly_peer_add_audio(StreamlyPeer *peer, uint32_t ssrc, int payload_type)
 		return impl->audio.track != nullptr;
 
 	} catch (...) {
+
 		return 0;
+
 	}
 
 }
@@ -269,13 +299,16 @@ int streamly_peer_add_video(StreamlyPeer *peer, uint32_t ssrc, uint32_t rtx_ssrc
 	auto impl = asImpl(peer);
 
 	if (impl == nullptr || impl->pc == nullptr) {
+
 		return 0;
+
 	}
 
 	try {
 
 		rtc::Description::Video video("1", rtc::Description::Direction::SendRecv);
 		addDiscordVideoExtensions(video);
+
 		video.addH264Codec(payload_type);
 		video.addRtxCodec(rtx_payload_type, payload_type, rtc::RtpPacketizer::VideoClockRate);
 		video.addSSRC(ssrc, "streamly");
@@ -285,7 +318,9 @@ int streamly_peer_add_video(StreamlyPeer *peer, uint32_t ssrc, uint32_t rtx_ssrc
 		return impl->video.track != nullptr;
 
 	} catch (...) {
+
 		return 0;
+
 	}
 
 }
@@ -295,7 +330,9 @@ void streamly_peer_create_offer(StreamlyPeer *peer) {
 	auto impl = asImpl(peer);
 
 	if (impl == nullptr || impl->pc == nullptr) {
+
 		return;
+
 	}
 
 	impl->pc->setLocalDescription(rtc::Description::Type::Offer);
@@ -307,6 +344,7 @@ int streamly_peer_set_remote_answer(StreamlyPeer *peer, const char *sdp) {
 	auto impl = asImpl(peer);
 
 	if (impl == nullptr || impl->pc == nullptr || sdp == nullptr) {
+
 		return 0;
 	}
 
@@ -316,7 +354,9 @@ int streamly_peer_set_remote_answer(StreamlyPeer *peer, const char *sdp) {
 		return 1;
 
 	} catch (...) {
+
 		return 0;
+
 	}
 
 }
@@ -326,7 +366,9 @@ int streamly_peer_connected(StreamlyPeer *peer) {
 	auto impl = asImpl(peer);
 
 	if (impl == nullptr || impl->pc == nullptr || impl->closed) {
+
 		return 0;
+
 	}
 
 	return impl->pc->state() == rtc::PeerConnection::State::Connected ? 1 : 0;
@@ -338,15 +380,21 @@ int streamly_peer_media_ready(StreamlyPeer *peer) {
 	auto impl = asImpl(peer);
 
 	if (impl == nullptr || impl->closed || impl->pc == nullptr) {
+
 		return 0;
+
 	}
 
 	if (impl->pc->state() != rtc::PeerConnection::State::Connected) {
+
 		return 0;
+
 	}
 
 	if (impl->audio.track == nullptr || impl->video.track == nullptr) {
+
 		return 0;
+
 	}
 
 	return impl->audio.track->isOpen() && impl->video.track->isOpen() ? 1 : 0;
@@ -358,7 +406,9 @@ int streamly_peer_setup_audio_packetizer(StreamlyPeer *peer, uint32_t ssrc, int 
 	auto impl = asImpl(peer);
 
 	if (impl == nullptr || impl->audio.track == nullptr) {
+
 		return 0;
+
 	}
 
 	try {
@@ -367,7 +417,9 @@ int streamly_peer_setup_audio_packetizer(StreamlyPeer *peer, uint32_t ssrc, int 
 		return 1;
 
 	} catch (...) {
+
 		return 0;
+
 	}
 
 }
@@ -377,7 +429,9 @@ int streamly_peer_setup_video_packetizer(StreamlyPeer *peer, uint32_t ssrc, int 
 	auto impl = asImpl(peer);
 
 	if (impl == nullptr || impl->video.track == nullptr) {
+
 		return 0;
+
 	}
 
 	try {
@@ -386,7 +440,9 @@ int streamly_peer_setup_video_packetizer(StreamlyPeer *peer, uint32_t ssrc, int 
 		return 1;
 
 	} catch (...) {
+
 		return 0;
+
 	}
 
 }
@@ -396,13 +452,17 @@ int streamly_peer_send_audio(StreamlyPeer *peer, const uint8_t *data, size_t len
 	auto impl = asImpl(peer);
 
 	if (impl == nullptr || data == nullptr || len == 0) {
+
 		return 0;
+
 	}
 
 	std::lock_guard<std::mutex> lock(impl->mu);
 
 	if (impl->closed || impl->audio.track == nullptr || impl->audio.rtpConfig == nullptr) {
+
 		return 0;
+
 	}
 
 	return sendTrackFrame(impl->audio.track, impl->pc, data, len);
@@ -414,13 +474,17 @@ int streamly_peer_send_video(StreamlyPeer *peer, const uint8_t *data, size_t len
 	auto impl = asImpl(peer);
 
 	if (impl == nullptr || data == nullptr || len == 0) {
+
 		return 0;
+
 	}
 
 	std::lock_guard<std::mutex> lock(impl->mu);
 
 	if (impl->closed || impl->video.track == nullptr || impl->video.rtpConfig == nullptr) {
+
 		return 0;
+
 	}
 
 	return sendTrackFrame(impl->video.track, impl->pc, data, len);
@@ -432,7 +496,9 @@ void streamly_peer_advance_audio_timestamp(StreamlyPeer *peer, uint32_t clock_ra
 	auto impl = asImpl(peer);
 
 	if (impl == nullptr || impl->audio.rtpConfig == nullptr || clock_rate == 0) {
+
 		return;
+
 	}
 
 	impl->audio.rtpConfig->timestamp += static_cast<uint32_t>((duration_ms * clock_rate / 1000.0) + 0.5);
@@ -444,7 +510,9 @@ void streamly_peer_advance_video_timestamp(StreamlyPeer *peer, uint32_t clock_ra
 	auto impl = asImpl(peer);
 
 	if (impl == nullptr || impl->video.rtpConfig == nullptr || clock_rate == 0) {
+
 		return;
+
 	}
 
 	impl->video.rtpConfig->timestamp += static_cast<uint32_t>((duration_ms * clock_rate / 1000.0) + 0.5);
@@ -456,7 +524,9 @@ int streamly_peer_audio_open(StreamlyPeer *peer) {
 	auto impl = asImpl(peer);
 
 	if (impl == nullptr || impl->audio.track == nullptr) {
+
 		return 0;
+
 	}
 
 	return impl->audio.track->isOpen() ? 1 : 0;
@@ -468,7 +538,9 @@ int streamly_peer_video_open(StreamlyPeer *peer) {
 	auto impl = asImpl(peer);
 
 	if (impl == nullptr || impl->video.track == nullptr) {
+
 		return 0;
+
 	}
 
 	return impl->video.track->isOpen() ? 1 : 0;

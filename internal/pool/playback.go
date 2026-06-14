@@ -11,68 +11,79 @@ import (
 )
 
 const (
-	IntroSkipCTAText     = "Use /skip-intro to jump ahead"
-	PauseCTAText         = "Use /resume to resume playback."
-	LoadingCTAText       = "Loading live stream..."
-	liveCTADurationMs    = 8000
+
+	IntroSkipCTAText = "Use /skip-intro to jump ahead"
+	PauseCTAText = "Use /resume to resume playback."
+	LoadingCTAText = "Loading live stream..."
+	creditsCTAPrefix = "Check #"
+
+	liveCTADurationMs = 8000
 	playbackPollInterval = 2 * time.Second
-	creditsCTAPrefix     = "Check #"
 
 	pauseBodyLineWidth = 64
-	pauseBodyMaxLines  = 3
+	pauseBodyMaxLines = 3
+
 )
 
-// SegmentCTA is a transient callout shown at the start of one transcode segment.
 type SegmentCTA struct {
-	Text       string
+
+	Text string
 	DurationMs int64
 }
 
-// TimedCTA is a callout anchored to absolute media timestamps.
 type TimedCTA struct {
-	Text    string
+
+	Text string
 	StartMs int64
-	EndMs   int64
+	EndMs int64
 }
 
-// SetCTAFont configures the drawtext font for on-stream callouts.
 func (session *Session) SetCTAFont(path string) {
+
 	session.ctaFontPath = path
+
 }
 
-// SetTimedCTA registers a position-anchored callout for upcoming segments.
 func (session *Session) SetTimedCTA(cta TimedCTA) {
+
 	session.timedCTAs = append(session.timedCTAs, cta)
+
 }
 
-// HasIntroCTA reports whether the skip-intro overlay is armed for this session.
 func (session *Session) HasIntroCTA() bool {
 
 	for _, cta := range session.timedCTAs {
+
 		if cta.Text == IntroSkipCTAText {
+
 			return true
+
 		}
+
 	}
 
 	return false
 
 }
 
-// HasCreditsCTA reports whether the credits auto-next overlay is armed for this session.
 func (session *Session) HasCreditsCTA() bool {
 
 	for _, cta := range session.timedCTAs {
+
 		if len(cta.Text) >= len(creditsCTAPrefix) && cta.Text[:len(creditsCTAPrefix)] == creditsCTAPrefix {
+
 			return true
+
 		}
+
 	}
 
 	return false
 
 }
 
-// SetCreditsTrigger arms auto-next when playback reaches the credits window.
 func (session *Session) SetCreditsTrigger(positionMs int64) {
+
 	session.creditsTriggerMs = positionMs
 }
 
@@ -85,27 +96,36 @@ func (session *Session) buildCTAWindows(offset time.Duration) []transcode.CTAWin
 	for _, cta := range session.timedCTAs {
 
 		if cta.Text == "" || cta.EndMs <= offsetMs {
+
 			continue
+
 		}
 
 		startMs := cta.StartMs - offsetMs
 
 		if startMs < 0 {
+
 			startMs = 0
+
 		}
 
 		endMs := cta.EndMs - offsetMs
 
 		windows = append(windows, transcode.CTAWindow{
-			Text:    cta.Text,
+
+			Text: cta.Text,
+
 			StartMs: startMs,
-			EndMs:   endMs,
+			EndMs: endMs,
+
 		})
 
 	}
 
 	for _, cta := range session.pendingSegmentCTAs {
+
 		if cta.Text == "" {
+
 			continue
 		}
 
@@ -113,13 +133,17 @@ func (session *Session) buildCTAWindows(offset time.Duration) []transcode.CTAWin
 		endMs := startMs + cta.DurationMs
 
 		if cta.DurationMs <= 0 {
+
 			endMs = startMs + liveCTADurationMs
 		}
 
 		windows = append(windows, transcode.CTAWindow{
-			Text:    cta.Text,
+
+			Text: cta.Text,
+
 			StartMs: startMs,
-			EndMs:   endMs,
+			EndMs: endMs,
+
 		})
 
 	}
@@ -133,17 +157,24 @@ func (session *Session) buildCTAWindows(offset time.Duration) []transcode.CTAWin
 func (session *Session) enrichTranscodeRequest(treq *transcode.Request, offset time.Duration) {
 
 	if windows := session.buildCTAWindows(offset); len(windows) > 0 {
+
 		treq.CTAs = windows
 	}
 
 	if treq.CTAFontPath == "" && session.ctaFontPath != "" {
+
 		treq.CTAFontPath = session.ctaFontPath
+
 	}
 
 	if treq.Live {
+
 		treq.PauseCard = session.buildLoadingCard(treq.Caption)
+
 	} else {
+
 		treq.PauseCard = session.buildPauseCard(treq.Caption)
+
 	}
 
 }
@@ -154,28 +185,36 @@ func (session *Session) buildLoadingCard(caption string) *transcode.PauseCard {
 	card.CTA = LoadingCTAText
 
 	if card.Title == "Paused" {
+
 		card.Title = "Loading"
+
 	}
 
 	return card
 
 }
 
-// buildPauseCard composes the on-stream pause screen from the session's metadata.
 func (session *Session) buildPauseCard(caption string) *transcode.PauseCard {
 
 	card := &transcode.PauseCard{
-		Title:    caption,
-		CTA:      PauseCTAText,
+
+		Title: caption,
+		CTA: PauseCTAText,
+
 		FontPath: session.ctaFontPath,
+
 	}
 
 	if meta := session.Metadata; meta != nil {
 
 		if meta.Details.Title != "" {
+
 			card.Title = meta.Details.Title
+
 		} else if meta.VideoName != "" {
+
 			card.Title = meta.VideoName
+
 		}
 
 		if meta.Episode != nil {
@@ -185,12 +224,16 @@ func (session *Session) buildPauseCard(caption string) *transcode.PauseCard {
 			name := meta.Episode.Title
 
 			if name == "" {
+
 				key := fmt.Sprintf("%d:%d", meta.Episode.Season, meta.Episode.Episode)
 				name = meta.Details.EpisodeTitles[key]
+
 			}
 
 			if name != "" {
+
 				card.Subtitle += " — " + name
+
 			}
 
 		}
@@ -200,6 +243,7 @@ func (session *Session) buildPauseCard(caption string) *transcode.PauseCard {
 	}
 
 	if card.Title == "" {
+
 		card.Title = "Paused"
 	}
 
@@ -207,13 +251,12 @@ func (session *Session) buildPauseCard(caption string) *transcode.PauseCard {
 
 }
 
-// wrapPauseBody word-wraps a description into at most maxLines lines of width runes,
-// marking truncation with an ellipsis.
 func wrapPauseBody(text string, width, maxLines int) []string {
 
 	words := strings.Fields(text)
 
 	if len(words) == 0 {
+
 		return nil
 	}
 
@@ -222,25 +265,36 @@ func wrapPauseBody(text string, width, maxLines int) []string {
 	for _, word := range words {
 
 		if utf8.RuneCountInString(word) > width {
+
 			word = truncateRunes(word, width)
+
 		}
 
 		line := lines[len(lines)-1]
 
 		switch {
-		case line == "":
-			lines[len(lines)-1] = word
-		case utf8.RuneCountInString(line)+1+utf8.RuneCountInString(word) <= width:
-			lines[len(lines)-1] = line + " " + word
-		default:
-			lines = append(lines, word)
+
+			case line == "":
+
+				lines[len(lines)-1] = word
+
+			case utf8.RuneCountInString(line)+1+utf8.RuneCountInString(word) <= width:
+
+				lines[len(lines)-1] = line + " " + word
+
+			default:
+
+				lines = append(lines, word)
+
 		}
 
 	}
 
 	if len(lines) > maxLines {
+
 		lines = lines[:maxLines]
 		lines[maxLines-1] = truncateRunes(lines[maxLines-1], width-3) + "..."
+
 	}
 
 	return lines
@@ -250,12 +304,14 @@ func wrapPauseBody(text string, width, maxLines int) []string {
 func truncateRunes(text string, max int) string {
 
 	if max <= 0 {
+
 		return ""
 	}
 
 	runes := []rune(text)
 
 	if len(runes) <= max {
+
 		return text
 	}
 
@@ -266,7 +322,9 @@ func truncateRunes(text string, max int) string {
 func (p *Pool) monitorPlayback(ctx context.Context, session *Session, request Request) {
 
 	if request.OnNearEnd == nil || session.Metadata == nil || session.Metadata.Episode == nil {
+
 		return
+
 	}
 
 	ticker := time.NewTicker(playbackPollInterval)
@@ -275,27 +333,40 @@ func (p *Pool) monitorPlayback(ctx context.Context, session *Session, request Re
 	for {
 
 		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
+
+			case <-ctx.Done():
+
+				return
+
+			case <-ticker.C: // check playback position every interval
+
 		}
 
 		if !session.Busy || session.nearEndTriggered {
+
 			return
+
 		}
 
 		stats := p.Stats(session)
 
 		if stats.DurationMs == nil || *stats.DurationMs <= 0 {
+
 			continue
+
 		}
 
 		if session.creditsTriggerMs > 0 && stats.PositionMs >= session.creditsTriggerMs {
+
 			session.nearEndTriggered = true
+
 			if request.OnNearEnd != nil {
+
 				request.OnNearEnd()
 			}
+
 			return
+
 		}
 
 	}

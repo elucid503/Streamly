@@ -11,45 +11,50 @@ import (
 )
 
 const (
-	defaultBaseURL    = "https://dami-tv.pro"
-	channelsPath      = "/data/tv-channels.json?v=302"
+	defaultBaseURL = "https://dami-tv.pro"
+	channelsPath = "/data/tv-channels.json?v=302"
 	legacyResolvePath = "/papi/tv/resolve/"
 
-	catalogTTL = 15 * time.Minute // How long the tv-channels.json catalog stays cached.
+	catalogTTL = 15 * time.Minute
 )
 
-// TVOptions tunes a TVClient instance.
 type TVOptions struct {
-	BaseURL string // API base URL. Defaults to TV_BASE_URL env or dami-tv.pro.
+
+	BaseURL string
 }
 
-// TVClient fetches channel listings and resolves HLS playlists for live TV channels.
 type TVClient struct {
-	baseURL string
-	client  *http.Client
 
-	catalogMu   sync.RWMutex
-	catalog     *ChannelCatalog
-	catalogAt   time.Time
+	baseURL string
+	client *http.Client
+
+	catalogMu sync.RWMutex
+	catalog *ChannelCatalog
+	catalogAt time.Time
+
 	refreshOnce sync.Once
 }
 
-// NewTVClient builds a TVClient with optional overrides.
 func NewTVClient(options TVOptions) *TVClient {
 
 	baseURL := options.BaseURL
 
 	if baseURL == "" {
+
 		baseURL = os.Getenv("TV_BASE_URL")
 	}
 
 	if baseURL == "" {
+
 		baseURL = defaultBaseURL
 	}
 
 	client := &TVClient{
+
 		baseURL: strings.TrimRight(baseURL, "/"),
+
 		client: &http.Client{
+
 			Timeout: 30 * time.Second,
 		},
 	}
@@ -60,12 +65,12 @@ func NewTVClient(options TVOptions) *TVClient {
 
 }
 
-// ResolveHLS turns a daddyId (e.g. "44") into a resolved HLS playlist URL.
 func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
 
 	stream, err := c.ResolveStream(daddyID)
 
 	if err != nil {
+
 		return "", err
 	}
 
@@ -80,10 +85,12 @@ func parseResolveResponse(body []byte) (string, error) {
 	if err := json.Unmarshal(body, &tv247); err == nil {
 
 		if tv247.Error != "" {
+
 			return "", fmt.Errorf("resolve failed: %s", tv247.Error)
 		}
 
 		if tv247.ProxyPlaylistURL != "" {
+
 			return tv247.ProxyPlaylistURL, nil
 		}
 
@@ -92,6 +99,7 @@ func parseResolveResponse(body []byte) (string, error) {
 	var legacy ResolveResult
 
 	if err := json.Unmarshal(body, &legacy); err != nil {
+
 		return "", fmt.Errorf("decode resolve response: %w", err)
 	}
 
@@ -100,6 +108,7 @@ func parseResolveResponse(body []byte) (string, error) {
 		msg := legacy.Error
 
 		if msg == "" {
+
 			msg = string(body)
 		}
 
@@ -108,16 +117,19 @@ func parseResolveResponse(body []byte) (string, error) {
 	}
 
 	if legacy.Stream == "" {
+
 		return "", nil
 	}
 
 	streamPath := legacy.Stream
 
 	if strings.HasPrefix(streamPath, "http://") || strings.HasPrefix(streamPath, "https://") {
+
 		return streamPath, nil
 	}
 
 	if !strings.HasPrefix(streamPath, "/") {
+
 		streamPath = "/" + streamPath
 	}
 
@@ -125,20 +137,25 @@ func parseResolveResponse(body []byte) (string, error) {
 
 }
 
-// ResolveChannel resolves HLS for a catalog channel using its daddyId.
 func (c *TVClient) ResolveChannel(channel Channel) (*StreamInfo, error) {
 
 	hls, err := c.ResolveHLS(channel.DaddyID)
 
 	if err != nil {
+
 		return nil, err
 	}
 
-	return &StreamInfo{Channel: channel, HLSURL: hls}, nil
+	return &StreamInfo{
+
+		Channel: channel,
+		HLSURL: hls,
+	}, nil
 
 }
 
 func (c *TVClient) cachedCatalog() *ChannelCatalog {
+
 	return c.anyCatalog()
 }
 
@@ -148,6 +165,7 @@ func (c *TVClient) storeCatalog(catalog *ChannelCatalog) {
 	defer c.catalogMu.Unlock()
 
 	c.catalog = catalog
+
 	c.catalogAt = time.Now()
 
 }
@@ -160,15 +178,18 @@ func (c *TVClient) get(rawURL, referer string) (*http.Response, error) {
 	request, err := http.NewRequest(http.MethodGet, rawURL, nil)
 
 	if err != nil {
+
 		return nil, err
 	}
 
 	if referer == "" {
+
 		referer = c.baseURL + "/"
 	}
 
 	request.Header.Set("User-Agent", tvBrowserUA)
 	request.Header.Set("Accept-Language", "en-US,en;q=0.9")
+
 	request.Header.Set("Referer", referer)
 
 	return c.client.Do(request)
