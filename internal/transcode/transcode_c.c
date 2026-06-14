@@ -395,11 +395,11 @@ static int open_input_url_once(const char *url, const char *headers, bool live, 
     av_dict_set(&opts, "reconnect_streamed", "1", 0);
     av_dict_set(&opts, "reconnect_on_network_error", "1", 0);
     av_dict_set(&opts, "reconnect_delay_max", "8", 0);
+    av_dict_set(&opts, "allowed_extensions", "ALL", 0);
+    av_dict_set(&opts, "seg_format_options", "f=mpegts", 0);
+    av_dict_set(&opts, "seg_max_retry", "3", 0);
 
     if (live) {
-        av_dict_set(&opts, "allowed_extensions", "ALL", 0);
-        av_dict_set(&opts, "seg_format_options", "f=mpegts", 0);
-        av_dict_set(&opts, "seg_max_retry", "3", 0);
         av_dict_set(&opts, "http_multiple", "1", 0);
         av_dict_set(&opts, "rw_timeout", "20000000", 0);
         av_dict_set(&opts, "timeout", "20000000", 0);
