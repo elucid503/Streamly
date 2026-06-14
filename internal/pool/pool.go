@@ -20,21 +20,17 @@ import (
 )
 
 var (
-
 	ErrNoWorker = errors.New("No worker is configured for your server.")
 	ErrWorkerBusy = errors.New("A stream is already active in this server.")
 	ErrKeyChangeActive = errors.New("cannot change key while a stream is active")
-
 )
 
 type CloseReason string
 
 const (
-
 	CloseEnded CloseReason = "ended"
 	CloseStopped CloseReason = "stopped"
 	CloseError CloseReason = "error"
-
 )
 
 type QualityResolver func(attempt int) (string, error)
@@ -184,6 +180,7 @@ func (p *Pool) LoadWorkers(ctx context.Context) error {
 	if err := p.store.Load(); err != nil {
 
 		return err
+
 	}
 
 	entries := p.store.All()
@@ -201,6 +198,7 @@ func (p *Pool) LoadWorkers(ctx context.Context) error {
 			if err := p.addWorker(ctx, guildID, token); err != nil {
 
 				log.Printf("worker for guild %s failed to log in: %v", guildID, err)
+
 			}
 
 		}(guildID, entry.Token)
@@ -223,11 +221,13 @@ func (p *Pool) RequireAvailable(guildID string) error {
 	if !ok {
 
 		return ErrNoWorker
+
 	}
 
 	if session.Busy {
 
 		return ErrWorkerBusy
+
 	}
 
 	return nil
@@ -244,11 +244,13 @@ func (p *Pool) Acquire(guildID string) (*Session, error) {
 	if !ok {
 
 		return nil, ErrNoWorker
+
 	}
 
 	if session.Busy {
 
 		return nil, ErrWorkerBusy
+
 	}
 
 	session.Busy = true
@@ -286,6 +288,7 @@ func (session *Session) Live() bool {
 	if session.request == nil {
 
 		return false
+
 	}
 
 	return session.request.Live
@@ -302,6 +305,7 @@ func (p *Pool) ActiveInGuild(guildID string) *Session {
 	if session != nil && session.Busy {
 
 		return session
+
 	}
 
 	return nil
@@ -318,11 +322,13 @@ func (p *Pool) Active(guildID, channelID string) *Session {
 	if session == nil || !session.Busy || session.request == nil {
 
 		return nil
+
 	}
 
 	if channelID != "" && session.request.ChannelID != channelID {
 
 		return nil
+
 	}
 
 	return session
@@ -336,6 +342,7 @@ func (p *Pool) Stats(session *Session) Stats {
 	if session.Paused && !session.pausedAt.IsZero() {
 
 		now = session.pausedAt
+
 	}
 
 	uptime := int64(0)
@@ -343,6 +350,7 @@ func (p *Pool) Stats(session *Session) Stats {
 	if !session.startedAt.IsZero() {
 
 		uptime = now.Sub(session.startedAt).Milliseconds()
+
 	}
 
 	position := p.positionMs(session)
@@ -362,6 +370,7 @@ func (p *Pool) Stats(session *Session) Stats {
 		QualityLabel: qualityOf(session),
 		PositionMs: position,
 		DurationMs: session.stats.DurationMs,
+
 	}
 
 }
@@ -371,6 +380,7 @@ func (p *Pool) positionMs(session *Session) int64 {
 	if session.request == nil || session.startedAt.IsZero() {
 
 		return 0
+
 	}
 
 	now := time.Now()
@@ -378,6 +388,7 @@ func (p *Pool) positionMs(session *Session) int64 {
 	if session.Paused && !session.pausedAt.IsZero() {
 
 		now = session.pausedAt
+
 	}
 
 	elapsed := now.Sub(session.startedAt).Milliseconds()
@@ -385,6 +396,7 @@ func (p *Pool) positionMs(session *Session) int64 {
 	if session.stats.DurationMs != nil {
 
 		return min64(elapsed, *session.stats.DurationMs)
+
 	}
 
 	return elapsed
@@ -405,6 +417,7 @@ func (p *Pool) Play(ctx context.Context, session *Session, request Request) erro
 
 		log.Printf(`[stream] voice join failed for "%s": %v`, request.Caption, err)
 		return err
+
 	}
 
 	log.Printf(`[stream] voice joined; starting pipeline for "%s"`, request.Caption)
@@ -414,11 +427,13 @@ func (p *Pool) Play(ctx context.Context, session *Session, request Request) erro
 		if !session.Busy {
 
 			return
+
 		}
 
 		if session.controller != nil {
 
 			session.controller()
+
 		}
 
 	})
@@ -428,6 +443,7 @@ func (p *Pool) Play(ctx context.Context, session *Session, request Request) erro
 	if request.OnPrepare != nil {
 
 		request.OnPrepare(session)
+
 	}
 
 	go p.runLoop(session, request)
@@ -444,6 +460,7 @@ func (p *Pool) Stop(session *Session) {
 	if session.controller != nil {
 
 		session.controller()
+
 	}
 
 }
@@ -453,6 +470,7 @@ func (p *Pool) Pause(session *Session) {
 	if session.Paused || !session.Busy || session.Live() {
 
 		return
+
 	}
 
 	session.Paused = true
@@ -461,6 +479,7 @@ func (p *Pool) Pause(session *Session) {
 	if session.transcodePause != nil {
 
 		session.transcodePause()
+
 	}
 
 }
@@ -470,11 +489,13 @@ func (p *Pool) Resume(session *Session) {
 	if !session.Paused {
 
 		return
+
 	}
 
 	if !session.startedAt.IsZero() && !session.pausedAt.IsZero() {
 
 		session.startedAt = session.startedAt.Add(time.Since(session.pausedAt))
+
 	}
 
 	session.Paused = false
@@ -483,6 +504,7 @@ func (p *Pool) Resume(session *Session) {
 	if session.transcodeResume != nil {
 
 		session.transcodeResume()
+
 	}
 
 }
@@ -497,22 +519,26 @@ func (p *Pool) Seek(session *Session, target time.Duration) (time.Duration, erro
 	if !session.Busy || session.request == nil {
 
 		return 0, errors.New("no active stream")
+
 	}
 
 	if session.request.Live {
 
 		return 0, errors.New("live streams cannot be seeked")
+
 	}
 
 	// libav 6.1's HLS demuxer corrupts fMP4 on av_seek_frame; refuse rather than freeze.
 	if source.IsHlsURL(session.request.InitialURL) {
 
 		return 0, ErrUnseekable
+
 	}
 
 	if target < 0 {
 
 		target = 0
+
 	}
 
 	if ms := session.stats.DurationMs; ms != nil {
@@ -522,11 +548,13 @@ func (p *Pool) Seek(session *Session, target time.Duration) (time.Duration, erro
 		if limit < 0 {
 
 			limit = 0
+
 		}
 
 		if target > limit {
 
 			target = limit
+
 		}
 
 	}
@@ -536,6 +564,7 @@ func (p *Pool) Seek(session *Session, target time.Duration) (time.Duration, erro
 	if session.segmentCancel != nil {
 
 		session.segmentCancel()
+
 	}
 
 	return target, nil
@@ -548,12 +577,14 @@ func (p *Pool) Release(session *Session) {
 
 		session.controller()
 		session.controller = nil
+
 	}
 
 	if session.media != nil {
 
 		session.media.Destroy()
 		session.media = nil
+
 	}
 
 	session.request = nil
@@ -571,6 +602,7 @@ func (p *Pool) Release(session *Session) {
 	if session.Captions != nil {
 
 		session.Captions.Reset()
+
 	}
 
 	session.FontsDir = ""
@@ -619,6 +651,7 @@ func (p *Pool) runLoop(session *Session, request Request) {
 	if request.OnNearEnd != nil {
 
 		go p.monitorPlayback(ctx, session, request)
+
 	}
 
 	playErr := p.stream(ctx, session, request)
@@ -626,10 +659,12 @@ func (p *Pool) runLoop(session *Session, request Request) {
 	if session.StopRequested {
 
 		reason = CloseStopped
+
 	} else if playErr != nil {
 
 		reason = CloseError
 		log.Printf(`[stream] "%s" failed: %v`, request.Caption, playErr)
+
 	}
 
 	cancel()
@@ -637,6 +672,7 @@ func (p *Pool) runLoop(session *Session, request Request) {
 	if reason == CloseEnded && request.OnNearEnd != nil && !session.nearEndTriggered {
 
 		request.OnNearEnd()
+
 	}
 
 	p.Release(session)
@@ -644,6 +680,7 @@ func (p *Pool) runLoop(session *Session, request Request) {
 	if request.OnClose != nil {
 
 		request.OnClose(reason)
+
 	}
 
 }
@@ -655,6 +692,7 @@ func (p *Pool) stream(ctx context.Context, session *Session, request Request) er
 	if headers == nil {
 
 		headers = config.FebboxStreamHeaders()
+
 	}
 
 	playback, err := streamer.OpenPlayback(ctx, session.Streamer)
@@ -662,6 +700,7 @@ func (p *Pool) stream(ctx context.Context, session *Session, request Request) er
 	if err != nil {
 
 		return err
+
 	}
 
 	defer playback.Close()
@@ -669,6 +708,7 @@ func (p *Pool) stream(ctx context.Context, session *Session, request Request) er
 	if source.IsHlsURL(request.InitialURL) {
 
 		return p.playHLS(ctx, session, playback, request, headers)
+
 	}
 
 	return p.playProgressive(ctx, session, playback, request, headers)
@@ -685,6 +725,7 @@ func (p *Pool) playProgressive(ctx context.Context, session *Session, playback *
 		if err := ctx.Err(); err != nil {
 
 			return err
+
 		}
 
 		playbackURL, err := playbackURLForAttempt(request, qualityAttempt)
@@ -692,6 +733,7 @@ func (p *Pool) playProgressive(ctx context.Context, session *Session, playback *
 		if err != nil {
 
 			return err
+
 		}
 
 		media, err := source.Create(request.ResolveURL, headers, playbackURL, session.stats)
@@ -699,6 +741,7 @@ func (p *Pool) playProgressive(ctx context.Context, session *Session, playback *
 		if err != nil {
 
 			return err
+
 		}
 
 		session.media = media
@@ -707,6 +750,7 @@ func (p *Pool) playProgressive(ctx context.Context, session *Session, playback *
 
 			Source: media,
 			Caption: request.Caption,
+
 		}
 
 		session.enrichTranscodeRequest(&treq, offset)
@@ -719,16 +763,19 @@ func (p *Pool) playProgressive(ctx context.Context, session *Session, playback *
 
 			offset = target
 			continue
+
 		}
 
 		if ctx.Err() != nil {
 
 			return ctx.Err()
+
 		}
 
 		if playErr != nil {
 
 			return playErr
+
 		}
 
 		if transErr != nil && request.QualityURL != nil {
@@ -740,6 +787,7 @@ func (p *Pool) playProgressive(ctx context.Context, session *Session, playback *
 				qualityAttempt++
 				offset = 0
 				continue
+
 			}
 
 		}
@@ -759,11 +807,13 @@ func playbackURLForAttempt(request Request, attempt int) (string, error) {
 		if err != nil {
 
 			return "", err
+
 		}
 
 		if url != "" {
 
 			return url, nil
+
 		}
 
 	}
@@ -771,6 +821,7 @@ func playbackURLForAttempt(request Request, attempt int) (string, error) {
 	if attempt == 0 {
 
 		return request.InitialURL, nil
+
 	}
 
 	return "", fmt.Errorf("no quality fallback for attempt %d", attempt)
@@ -790,6 +841,7 @@ func (p *Pool) playHLS(ctx context.Context, session *Session, playback *streamer
 	if request.Live {
 
 		return p.playLiveHLS(ctx, session, playback, request, headers)
+
 	}
 
 	return p.playVodHLS(ctx, session, playback, request, headers)
@@ -806,6 +858,7 @@ func (p *Pool) playVodHLS(ctx context.Context, session *Session, playback *strea
 		if ctx.Err() != nil {
 
 			return ctx.Err()
+
 		}
 
 		if attempt > 0 {
@@ -817,6 +870,7 @@ func (p *Pool) playVodHLS(ctx context.Context, session *Session, playback *strea
 				if fresh, err := request.ResolveURL(); err == nil && fresh != "" {
 
 					url = fresh
+
 				}
 
 			}
@@ -832,6 +886,7 @@ func (p *Pool) playVodHLS(ctx context.Context, session *Session, playback *strea
 			InputURL: url,
 			Headers: headers,
 			Caption: request.Caption,
+
 		}
 
 		session.enrichTranscodeRequest(&treq, 0)
@@ -841,24 +896,29 @@ func (p *Pool) playVodHLS(ctx context.Context, session *Session, playback *strea
 		if ctx.Err() != nil {
 
 			return ctx.Err()
+
 		}
 
 		if playErr == nil && transErr == nil {
 
 			return nil
+
 		}
 
 		if playErr != nil {
 
 			lastErr = playErr
+
 		} else {
 
 			lastErr = transErr
+
 		}
 
 		if time.Since(started) >= hlsStartupRetryWindow || attempt >= config.Download.MaxRetries {
 
 			return lastErr
+
 		}
 
 	}
@@ -872,11 +932,13 @@ func liveFailureCountAfterSegment(consecutiveFailures int, segmentDuration time.
 	if segmentDuration >= liveStableSegmentWindow {
 
 		return 0
+
 	}
 
 	if cleanEnd {
 
 		return consecutiveFailures
+
 	}
 
 	return consecutiveFailures + 1
@@ -888,6 +950,7 @@ func liveReconnectDelay(consecutiveFailures int) time.Duration {
 	if consecutiveFailures <= 1 {
 
 		return liveReconnectDelayMin
+
 	}
 
 	shift := consecutiveFailures - 1
@@ -895,6 +958,7 @@ func liveReconnectDelay(consecutiveFailures int) time.Duration {
 	if shift > 3 {
 
 		shift = 3
+
 	}
 
 	delay := liveReconnectDelayMin * time.Duration(1<<shift)
@@ -902,6 +966,7 @@ func liveReconnectDelay(consecutiveFailures int) time.Duration {
 	if delay > liveReconnectDelayMax {
 
 		return liveReconnectDelayMax
+
 	}
 
 	return delay
@@ -918,6 +983,7 @@ func refreshLiveUpstream(ctx context.Context, request Request, currentURL string
 		if ctx.Err() != nil {
 
 			return url, headers
+
 		}
 
 		if request.ResolveURL != nil {
@@ -927,9 +993,11 @@ func refreshLiveUpstream(ctx context.Context, request Request, currentURL string
 			if err == nil && fresh != "" {
 
 				url = fresh
+
 			} else if err != nil {
 
 				log.Printf(`[stream] live URL re-resolve failed for "%s" (attempt %d/%d): %v`, request.Caption, retry+1, liveResolveRetries, err)
+
 			}
 
 		}
@@ -939,6 +1007,7 @@ func refreshLiveUpstream(ctx context.Context, request Request, currentURL string
 			if fresh := request.ResolveHeaders(); len(fresh) > 0 {
 
 				headers = fresh
+
 			}
 
 		}
@@ -946,6 +1015,7 @@ func refreshLiveUpstream(ctx context.Context, request Request, currentURL string
 		if request.ResolveURL == nil || url != "" {
 
 			return url, headers
+
 		}
 
 		select {
@@ -975,6 +1045,7 @@ func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *stre
 		if ctx.Err() != nil {
 
 			return ctx.Err()
+
 		}
 
 		if attempt > 0 {
@@ -1000,6 +1071,7 @@ func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *stre
 				}
 
 				continue
+
 			}
 
 			select {
@@ -1019,12 +1091,15 @@ func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *stre
 		if attempt == 0 {
 
 			session.pendingSegmentCTAs = nil
+
 		} else if consecutiveFailures > 1 {
 
 			session.pendingSegmentCTAs = []SegmentCTA{{Text: "The live stream provider is degraded", DurationMs: liveCTADurationMs}}
+
 		} else {
 
 			session.pendingSegmentCTAs = []SegmentCTA{{Text: "The live stream has restarted", DurationMs: liveCTADurationMs}}
+
 		}
 
 		treq := transcode.Request{
@@ -1033,6 +1108,7 @@ func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *stre
 			Headers: headers,
 			Caption: request.Caption,
 			Live: true,
+
 		}
 
 		session.enrichTranscodeRequest(&treq, 0)
@@ -1042,6 +1118,7 @@ func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *stre
 		if ctx.Err() != nil {
 
 			return ctx.Err()
+
 		}
 
 		cleanEnd := playErr == nil && transErr == nil
@@ -1049,6 +1126,7 @@ func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *stre
 		if cleanEnd {
 
 			log.Printf(`[stream] live source ended for "%s", reconnecting`, request.Caption)
+
 		} else {
 
 			err := playErr
@@ -1056,6 +1134,7 @@ func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *stre
 			if err == nil {
 
 				err = transErr
+
 			}
 
 			log.Printf(`[stream] live stream "%s" dropped: %v`, request.Caption, err)
@@ -1081,6 +1160,7 @@ func (p *Pool) runSegment(ctx context.Context, session *Session, playback *strea
 	if session.seekPending() {
 
 		segCancel()
+
 	}
 
 	treq.Start = offset
@@ -1094,9 +1174,11 @@ func (p *Pool) runSegment(ctx context.Context, session *Session, playback *strea
 			if session.request != nil && session.request.OnMediaProbed != nil {
 
 				session.request.OnMediaProbed(session, probedDurationMs)
+
 			}
 
 			session.armCreditsTrigger(probedDurationMs)
+
 		}
 
 		offset := time.Duration(startMs) * time.Millisecond
@@ -1106,6 +1188,7 @@ func (p *Pool) runSegment(ctx context.Context, session *Session, playback *strea
 		if fontPath == "" {
 
 			return "", windows
+
 		}
 
 		return fontPath, windows
@@ -1116,6 +1199,7 @@ func (p *Pool) runSegment(ctx context.Context, session *Session, playback *strea
 
 		treq.SubtitlePath = session.Captions.Path()
 		treq.FontsDir = session.FontsDir
+
 	}
 
 	ts, err := transcode.Start(treq)
@@ -1125,9 +1209,11 @@ func (p *Pool) runSegment(ctx context.Context, session *Session, playback *strea
 		if cleanup != nil {
 
 			cleanup()
+
 		}
 
 		return err, nil
+
 	}
 
 	session.transcodePause = ts.Pause
@@ -1138,6 +1224,7 @@ func (p *Pool) runSegment(ctx context.Context, session *Session, playback *strea
 
 		session.pausedAt = time.Now()
 		ts.Pause()
+
 	}
 
 	playErr := playback.Run(segCtx, ts)
@@ -1146,6 +1233,7 @@ func (p *Pool) runSegment(ctx context.Context, session *Session, playback *strea
 	if cleanup != nil {
 
 		cleanup()
+
 	}
 
 	// The packet feeds close on EOF without surfacing libav errors; ts.Done carries them.
@@ -1171,6 +1259,7 @@ func (p *Pool) SetKey(ctx context.Context, guildID, token string) error {
 
 		p.mu.Unlock()
 		return ErrKeyChangeActive
+
 	}
 
 	p.mu.Unlock()
@@ -1180,16 +1269,19 @@ func (p *Pool) SetKey(ctx context.Context, guildID, token string) error {
 	if err != nil {
 
 		return err
+
 	}
 
 	if err := client.Login(ctx); err != nil {
 
 		return err
+
 	}
 
 	if err := p.store.Set(guildID, token); err != nil {
 
 		return err
+
 	}
 
 	p.mu.Lock()
@@ -1198,6 +1290,7 @@ func (p *Pool) SetKey(ctx context.Context, guildID, token string) error {
 
 		existing.Streamer.SetOnVoiceLeave(nil)
 		existing.Streamer.LeaveVoice()
+
 	}
 
 	stream := streamer.New(client)
@@ -1208,6 +1301,7 @@ func (p *Pool) SetKey(ctx context.Context, guildID, token string) error {
 		Streamer: stream,
 
 		stats: &source.MediaSourceStats{},
+
 	}
 	p.mu.Unlock()
 
@@ -1222,11 +1316,13 @@ func (p *Pool) addWorker(ctx context.Context, guildID, token string) error {
 	if err != nil {
 
 		return err
+
 	}
 
 	if err := client.Login(ctx); err != nil {
 
 		return err
+
 	}
 
 	stream := streamer.New(client)
@@ -1239,6 +1335,7 @@ func (p *Pool) addWorker(ctx context.Context, guildID, token string) error {
 		Streamer: stream,
 
 		stats: &source.MediaSourceStats{},
+
 	}
 	p.mu.Unlock()
 
@@ -1251,6 +1348,7 @@ func captionOf(session *Session) string {
 	if session.request == nil {
 
 		return ""
+
 	}
 
 	return session.request.Caption
@@ -1262,6 +1360,7 @@ func channelOf(session *Session) string {
 	if session.request == nil {
 
 		return ""
+
 	}
 
 	return session.request.ChannelID
@@ -1273,6 +1372,7 @@ func qualityOf(session *Session) string {
 	if session.request == nil {
 
 		return ""
+
 	}
 
 	return session.request.QualityLabel
@@ -1284,6 +1384,7 @@ func min64(a, b int64) int64 {
 	if a < b {
 
 		return a
+
 	}
 
 	return b
@@ -1297,6 +1398,7 @@ func formatMem(bytes uint64) string {
 	if bytes < unit {
 
 		return fmt.Sprintf("%d B", bytes)
+
 	}
 
 	value := float64(bytes)
@@ -1306,6 +1408,7 @@ func formatMem(bytes uint64) string {
 
 		value /= unit
 		exp++
+
 	}
 
 	suffix := []string{"KiB", "MiB", "GiB", "TiB"}

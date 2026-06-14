@@ -13,6 +13,7 @@ var opusFrameSizesMs = []float64{
 	2.5, 5, 10, 20,
 	2.5, 5, 10, 20,
 	2.5, 5, 10, 20,
+
 }
 
 func opusPacketDuration(frame []byte) time.Duration {
@@ -20,6 +21,7 @@ func opusPacketDuration(frame []byte) time.Duration {
 	if len(frame) == 0 {
 
 		return 0
+
 	}
 
 	config := int(frame[0] >> 3)
@@ -27,6 +29,7 @@ func opusPacketDuration(frame []byte) time.Duration {
 	if config < 0 || config >= len(opusFrameSizesMs) {
 
 		return 0
+
 	}
 
 	frameSizeMs := opusFrameSizesMs[config]
@@ -40,14 +43,17 @@ func opusPacketDuration(frame []byte) time.Duration {
 		if len(frame) < 2 {
 
 			return 0
+
 		}
 
 		frameCount = int(frame[1] & 0b111111)
+
 	}
 
 	if frameCount <= 0 {
 
 		return 0
+
 	}
 
 	ms := frameSizeMs * float64(frameCount)

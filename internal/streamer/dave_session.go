@@ -55,6 +55,7 @@ func newDaveSession(userID string, callbacks godave.Callbacks) *daveSession {
 
 		decryptors: make(map[godave.UserID]*libdave.Decryptor),
 		preparedTransitions: make(map[uint16]uint16),
+
 	}
 
 }
@@ -97,6 +98,7 @@ func (s *daveSession) MediaReady() bool {
 	if s.protocolVersion == daveDisabledProtocolVersion {
 
 		return true
+
 	}
 
 	return s.active()
@@ -141,6 +143,7 @@ func (s *daveSession) encrypt(mediaType libdave.MediaType, ssrc uint32, frame []
 	if !s.active() {
 
 		return frame, nil
+
 	}
 
 	need := s.encryptor.GetMaxCiphertextByteSize(mediaType, len(frame))
@@ -149,11 +152,13 @@ func (s *daveSession) encrypt(mediaType libdave.MediaType, ssrc uint32, frame []
 	if mediaType == libdave.MediaTypeVideo {
 
 		scratch = &s.videoEncryptScratch
+
 	}
 
 	if cap(*scratch) < need {
 
 		*scratch = make([]byte, need)
+
 	}
 
 	out := (*scratch)[:need]
@@ -162,6 +167,7 @@ func (s *daveSession) encrypt(mediaType libdave.MediaType, ssrc uint32, frame []
 	if err != nil {
 
 		return nil, err
+
 	}
 
 	// Callers must send out[:n] before the next encrypt call on this media type (true for mediaSender pumps).
@@ -174,6 +180,7 @@ func (s *daveSession) EncryptorStats() string {
 	if s == nil || s.encryptor == nil {
 
 		return "unavailable"
+
 	}
 
 	s.mu.Lock()
@@ -224,6 +231,7 @@ func (s *daveSession) OnDavePrepareTransition(transitionID uint16, protocolVersi
 	if transitionID != daveInitTransitionID {
 
 		s.sendReadyForTransition(transitionID)
+
 	}
 
 }
@@ -247,6 +255,7 @@ func (s *daveSession) OnDavePrepareEpoch(epoch int, protocolVersion uint16) {
 	if epoch == daveMLSNewGroupExpectedEpoch {
 
 		s.sendMLSKeyPackage()
+
 	}
 
 }
@@ -270,6 +279,7 @@ func (s *daveSession) OnDaveMLSProposals(proposals []byte) {
 	if commitWelcome != nil {
 
 		s.sendMLSCommitWelcome(commitWelcome)
+
 	}
 
 }
@@ -284,6 +294,7 @@ func (s *daveSession) OnDaveMLSPrepareCommitTransition(transitionID uint16, comm
 	if res.IsIgnored() {
 
 		return
+
 	}
 
 	if res.IsFailed() {
@@ -291,6 +302,7 @@ func (s *daveSession) OnDaveMLSPrepareCommitTransition(transitionID uint16, comm
 		s.sendInvalidCommitWelcome(transitionID)
 		s.protocolInit(s.session.GetProtocolVersion())
 		return
+
 	}
 
 	s.prepareTransition(transitionID, s.session.GetProtocolVersion())
@@ -298,6 +310,7 @@ func (s *daveSession) OnDaveMLSPrepareCommitTransition(transitionID uint16, comm
 	if transitionID != daveInitTransitionID {
 
 		s.sendReadyForTransition(transitionID)
+
 	}
 
 }
@@ -314,6 +327,7 @@ func (s *daveSession) OnDaveMLSWelcome(transitionID uint16, welcomeMessage []byt
 		s.sendInvalidCommitWelcome(transitionID)
 		s.sendMLSKeyPackage()
 		return
+
 	}
 
 	s.prepareTransition(transitionID, s.session.GetProtocolVersion())
@@ -321,6 +335,7 @@ func (s *daveSession) OnDaveMLSWelcome(transitionID uint16, welcomeMessage []byt
 	if transitionID != daveInitTransitionID {
 
 		s.sendReadyForTransition(transitionID)
+
 	}
 
 }
@@ -334,6 +349,7 @@ func (s *daveSession) recognizedUserIDs() []string {
 	for userID := range s.decryptors {
 
 		userIDs = append(userIDs, string(userID))
+
 	}
 
 	return userIDs
@@ -346,10 +362,12 @@ func (s *daveSession) protocolInit(protocolVersion uint16) {
 
 		s.prepareEpoch(daveMLSNewGroupExpectedEpoch, protocolVersion)
 		s.sendMLSKeyPackage()
+
 	} else {
 
 		s.prepareTransition(daveInitTransitionID, protocolVersion)
 		s.executeTransition(daveInitTransitionID)
+
 	}
 
 }
@@ -359,6 +377,7 @@ func (s *daveSession) prepareEpoch(epoch int, protocolVersion uint16) {
 	if epoch != daveMLSNewGroupExpectedEpoch {
 
 		return
+
 	}
 
 	s.session.Init(protocolVersion, uint64(s.channelID), string(s.selfUserID))
@@ -372,6 +391,7 @@ func (s *daveSession) executeTransition(transitionID uint16) {
 	if !ok {
 
 		return
+
 	}
 
 	delete(s.preparedTransitions, transitionID)
@@ -379,6 +399,7 @@ func (s *daveSession) executeTransition(transitionID uint16) {
 	if protocolVersion == daveDisabledProtocolVersion {
 
 		s.session.Reset()
+
 	}
 
 	s.setupKeyRatchetForUser(s.selfUserID, protocolVersion)
@@ -390,14 +411,17 @@ func (s *daveSession) prepareTransition(transitionID uint16, protocolVersion uin
 	for userID := range s.decryptors {
 
 		s.setupKeyRatchetForUser(userID, protocolVersion)
+
 	}
 
 	if transitionID == daveInitTransitionID {
 
 		s.setupKeyRatchetForUser(s.selfUserID, protocolVersion)
+
 	} else {
 
 		s.preparedTransitions[transitionID] = protocolVersion
+
 	}
 
 	s.lastPreparedTransitionVersion = protocolVersion
@@ -416,9 +440,11 @@ func (s *daveSession) setupKeyRatchetForUser(userID godave.UserID, protocolVersi
 		if !disabled {
 
 			s.encryptor.SetKeyRatchet(s.session.GetKeyRatchet(string(userID)))
+
 		}
 
 		return
+
 	}
 
 	decryptor := s.decryptors[userID]
@@ -427,6 +453,7 @@ func (s *daveSession) setupKeyRatchetForUser(userID godave.UserID, protocolVersi
 	if !disabled {
 
 		decryptor.TransitionToKeyRatchet(s.session.GetKeyRatchet(string(userID)))
+
 	}
 
 }
@@ -436,6 +463,7 @@ func (s *daveSession) sendMLSKeyPackage() {
 	if err := s.callbacks.SendMLSKeyPackage(s.session.GetMarshalledKeyPackage()); err != nil {
 
 		s.logger.Error("failed to send MLS key package", slog.Any("err", err))
+
 	}
 
 }
@@ -445,6 +473,7 @@ func (s *daveSession) sendMLSCommitWelcome(message []byte) {
 	if err := s.callbacks.SendMLSCommitWelcome(message); err != nil {
 
 		s.logger.Error("failed to send MLS commit welcome", slog.Any("err", err))
+
 	}
 
 }
@@ -454,6 +483,7 @@ func (s *daveSession) sendReadyForTransition(transitionID uint16) {
 	if err := s.callbacks.SendReadyForTransition(transitionID); err != nil {
 
 		s.logger.Error("failed to send ready for transition", slog.Any("err", err))
+
 	}
 
 }
@@ -463,6 +493,7 @@ func (s *daveSession) sendInvalidCommitWelcome(transitionID uint16) {
 	if err := s.callbacks.SendInvalidCommitWelcome(transitionID); err != nil {
 
 		s.logger.Error("failed to send invalid commit welcome", slog.Any("err", err))
+
 	}
 
 }

@@ -3,7 +3,6 @@ package captions
 import "errors"
 
 var (
-
 	ErrNoFont = errors.New("captions: assets/font.ttf not found")
 	ErrNoSubtitle = errors.New("captions: no English subtitles found")
 	ErrUnconfigured = errors.New("captions: SUBDL_API_KEY not configured")
@@ -12,5 +11,4 @@ var (
 	ErrUnseekable = errors.New("captions: source cannot be restarted for burn-in")
 	ErrLiveUnsupported = errors.New("captions: live streams do not support captions")
 	ErrNoMetadata = errors.New("captions: stream metadata unavailable")
-
 )

@@ -53,6 +53,7 @@ const voiceCloseDisconnected = 4014
 type gatewayCallbacks struct {
 
 	gateway *mediaGateway
+
 }
 
 func (c gatewayCallbacks) SendMLSKeyPackage(mlsKeyPackage []byte) error {
@@ -119,6 +120,7 @@ func newMediaGateway(label, serverID, botID string, daveChannelID godave.Channel
 
 		ready: ready,
 		readDone: make(chan struct{}),
+
 	}
 	gateway.dave = newDaveSession(botID, gatewayCallbacks{gateway: gateway})
 	gateway.dave.SetChannelID(daveChannelID)
@@ -147,6 +149,7 @@ func (g *mediaGateway) setSession(sessionID string) {
 
 		_ = conn.Close()
 		return
+
 	}
 
 	g.tryConnect()
@@ -167,6 +170,7 @@ func (g *mediaGateway) setTokens(server, token string) {
 
 		_ = conn.Close()
 		return
+
 	}
 
 	g.tryConnect()
@@ -181,6 +185,7 @@ func (g *mediaGateway) tryConnect() {
 
 		g.mu.Unlock()
 		return
+
 	}
 
 	g.mu.Unlock()
@@ -188,6 +193,7 @@ func (g *mediaGateway) tryConnect() {
 	if err := g.dial(); err != nil {
 
 		log.Printf("[streamer] %s gateway dial: %v", g.label, err)
+
 	}
 
 }
@@ -204,6 +210,7 @@ func (g *mediaGateway) dial() error {
 	if err != nil {
 
 		return err
+
 	}
 
 	g.mu.Lock()
@@ -213,6 +220,7 @@ func (g *mediaGateway) dial() error {
 		g.mu.Unlock()
 		_ = conn.Close()
 		return fmt.Errorf("%s gateway closed", g.label)
+
 	}
 
 	g.conn = conn
@@ -232,6 +240,7 @@ func isIntentionalGatewayClose(err error) bool {
 	if !errors.As(err, &closeErr) {
 
 		return false
+
 	}
 
 	return closeErr.Code == voiceCloseDisconnected
@@ -248,6 +257,7 @@ func (g *mediaGateway) stopHeartbeat() {
 	if cancel != nil {
 
 		cancel()
+
 	}
 
 }
@@ -257,6 +267,7 @@ func (g *mediaGateway) resetPeer() {
 	if g.peer == nil {
 
 		return
+
 	}
 
 	g.peer.close()
@@ -276,21 +287,25 @@ func (g *mediaGateway) handleDisconnect(err error) {
 	if conn != nil {
 
 		_ = conn.Close()
+
 	}
 
 	if !g.signalingOnly {
 
 		g.resetPeer()
+
 	}
 
 	if g.closed {
 
 		return
+
 	}
 
 	if isIntentionalGatewayClose(err) {
 
 		return
+
 	}
 
 	log.Printf("[streamer] %s gateway read: %v; reconnecting", g.label, err)
@@ -298,6 +313,7 @@ func (g *mediaGateway) handleDisconnect(err error) {
 	if !g.reconnecting.CompareAndSwap(false, true) {
 
 		return
+
 	}
 
 	go func() {
@@ -319,6 +335,7 @@ func (g *mediaGateway) reconnectLoop() {
 		if g.closed {
 
 			return
+
 		}
 
 		g.mu.Lock()
@@ -329,6 +346,7 @@ func (g *mediaGateway) reconnectLoop() {
 
 			log.Printf("[streamer] %s gateway reconnect skipped: missing session credentials", g.label)
 			return
+
 		}
 
 		time.Sleep(backoff)
@@ -336,6 +354,7 @@ func (g *mediaGateway) reconnectLoop() {
 		if g.closed {
 
 			return
+
 		}
 
 		if err := g.dial(); err != nil {
@@ -345,6 +364,7 @@ func (g *mediaGateway) reconnectLoop() {
 			backoff = min(backoff*2, maxBackoff)
 
 			continue
+
 		}
 
 		log.Printf("[streamer] %s gateway reconnected", g.label)
@@ -367,29 +387,34 @@ func (g *mediaGateway) readLoop() {
 
 			g.handleDisconnect(err)
 			return
+
 		}
 
 		if messageType == websocket.BinaryMessage {
 
 			g.onBinary(raw)
 			continue
+
 		}
 
 		var packet struct {
 
-			Op int`json:"op"`
-			D json.RawMessage`json:"d"`
-			Seq int`json:"seq"`
+			Op int `json:"op"`
+			D json.RawMessage `json:"d"`
+			Seq int `json:"seq"`
+
 		}
 
 		if err := json.Unmarshal(raw, &packet); err != nil {
 
 			continue
+
 		}
 
 		if packet.Seq > 0 {
 
 			g.seq = packet.Seq
+
 		}
 
 		switch packet.Op {
@@ -415,6 +440,7 @@ func (g *mediaGateway) readLoop() {
 			if packet.Op >= 4000 {
 
 				log.Printf("[streamer] %s gateway error %d: %s", g.label, packet.Op, string(packet.D))
+
 			}
 
 		}
@@ -428,6 +454,7 @@ func (g *mediaGateway) onBinary(raw []byte) {
 	if len(raw) < 3 {
 
 		return
+
 	}
 
 	g.seq = int(binary.BigEndian.Uint16(raw[0:2]))
@@ -442,6 +469,7 @@ func (g *mediaGateway) onBinary(raw []byte) {
 		if len(payload) < 1 {
 
 			return
+
 		}
 
 		g.dave.OnDaveMLSProposals(payload)
@@ -449,6 +477,7 @@ func (g *mediaGateway) onBinary(raw []byte) {
 		if len(payload) < 2 {
 
 			return
+
 		}
 
 		transitionID := binary.BigEndian.Uint16(payload[0:2])
@@ -457,10 +486,12 @@ func (g *mediaGateway) onBinary(raw []byte) {
 		if len(payload) < 2 {
 
 			return
+
 		}
 
 		transitionID := binary.BigEndian.Uint16(payload[0:2])
 		g.dave.OnDaveMLSWelcome(transitionID, payload[2:])
+
 	}
 
 }
@@ -469,7 +500,8 @@ func (g *mediaGateway) onHello(data json.RawMessage) {
 
 	var hello struct {
 
-		HeartbeatInterval int`json:"heartbeat_interval"`
+		HeartbeatInterval int `json:"heartbeat_interval"`
+
 	}
 
 	_ = json.Unmarshal(data, &hello)
@@ -495,6 +527,7 @@ func (g *mediaGateway) onHello(data json.RawMessage) {
 				return
 			case <-ticker.C:
 				_ = g.send(voiceHeartbeat, map[string]any{"t": time.Now().UnixMilli(), "seq_ack": g.seq})
+
 			}
 
 		}
@@ -510,6 +543,7 @@ func (g *mediaGateway) onHello(data json.RawMessage) {
 		"video": true,
 		"streams": StreamsSimulcast,
 		"max_dave_protocol_version": g.maxDaveProtocolVersion(),
+
 	})
 
 }
@@ -520,6 +554,7 @@ func (g *mediaGateway) maxDaveProtocolVersion() int {
 
 		log.Printf("[streamer] %s dave disabled by STREAMLY_DISABLE_DAVE=1", g.label)
 		return daveDisabledProtocolVersion
+
 	}
 
 	return g.dave.MaxSupportedProtocolVersion()
@@ -528,13 +563,14 @@ func (g *mediaGateway) maxDaveProtocolVersion() int {
 
 type voiceReadyData struct {
 
-	SSRC int`json:"ssrc"`
-	Port int`json:"port"`
-	IP string`json:"ip"`
+	SSRC int `json:"ssrc"`
+	Port int `json:"port"`
+	IP string `json:"ip"`
 	Streams []struct {
 
-		SSRC int`json:"ssrc"`
-		RtxSSRC int`json:"rtx_ssrc"`
+		SSRC int `json:"ssrc"`
+		RtxSSRC int `json:"rtx_ssrc"`
+
 	} `json:"streams"`
 
 }
@@ -546,6 +582,7 @@ func (g *mediaGateway) onReady(data json.RawMessage) {
 		g.signalPeerReady(nil)
 
 		return
+
 	}
 
 	var ready voiceReadyData
@@ -556,6 +593,7 @@ func (g *mediaGateway) onReady(data json.RawMessage) {
 
 		log.Printf("[streamer] %s gateway ready without streams", g.label)
 		return
+
 	}
 
 	g.peer = newMediaPeer(g, ready.SSRC, ready.Streams[0].SSRC, ready.Streams[0].RtxSSRC)
@@ -572,6 +610,7 @@ func (g *mediaGateway) signalPeerReady(peer *MediaPeer) {
 
 	case g.ready <- peer:
 	default:
+
 	}
 
 }
@@ -581,11 +620,13 @@ func (g *mediaGateway) onSelectProtocolAck(data json.RawMessage) {
 	if g.peer == nil {
 
 		return
+
 	}
 
 	var ack struct {
 
-		DaveProtocolVersion int`json:"dave_protocol_version"`
+		DaveProtocolVersion int `json:"dave_protocol_version"`
+
 	}
 
 	_ = json.Unmarshal(data, &ack)
@@ -599,18 +640,21 @@ func (g *mediaGateway) onSelectProtocolAck(data json.RawMessage) {
 
 		log.Printf("[streamer] %s select protocol ack missing sdp: %s", g.label, string(data))
 		return
+
 	}
 
 	if err := validateSDP(remoteSDP); err != nil {
 
 		log.Printf("[streamer] %s prepared sdp invalid (%d bytes from %d raw): %v", g.label, len(remoteSDP), len(rawSDP), err)
 		return
+
 	}
 
 	if err := g.peer.setRemoteDescription(remoteSDP); err != nil {
 
 		log.Printf("[streamer] %s remote sdp: %v", g.label, err)
 		return
+
 	}
 
 	g.signalPeerReady(g.peer)
@@ -621,7 +665,8 @@ func (g *mediaGateway) onClientsConnect(data json.RawMessage) {
 
 	var payload struct {
 
-		UserIDs []string`json:"user_ids"`
+		UserIDs []string `json:"user_ids"`
+
 	}
 
 	_ = json.Unmarshal(data, &payload)
@@ -629,6 +674,7 @@ func (g *mediaGateway) onClientsConnect(data json.RawMessage) {
 	for _, userID := range payload.UserIDs {
 
 		g.dave.AddUser(godave.UserID(userID))
+
 	}
 
 }
@@ -637,7 +683,8 @@ func (g *mediaGateway) onClientDisconnect(data json.RawMessage) {
 
 	var payload struct {
 
-		UserID string`json:"user_id"`
+		UserID string `json:"user_id"`
+
 	}
 
 	_ = json.Unmarshal(data, &payload)
@@ -649,8 +696,9 @@ func (g *mediaGateway) onDavePrepareTransition(data json.RawMessage) {
 
 	var payload struct {
 
-		TransitionID uint16`json:"transition_id"`
-		ProtocolVersion uint16`json:"protocol_version"`
+		TransitionID uint16 `json:"transition_id"`
+		ProtocolVersion uint16 `json:"protocol_version"`
+
 	}
 
 	_ = json.Unmarshal(data, &payload)
@@ -662,7 +710,8 @@ func (g *mediaGateway) onDaveExecuteTransition(data json.RawMessage) {
 
 	var payload struct {
 
-		TransitionID uint16`json:"transition_id"`
+		TransitionID uint16 `json:"transition_id"`
+
 	}
 
 	_ = json.Unmarshal(data, &payload)
@@ -674,8 +723,9 @@ func (g *mediaGateway) onDavePrepareEpoch(data json.RawMessage) {
 
 	var payload struct {
 
-		Epoch int`json:"epoch"`
-		ProtocolVersion uint16`json:"protocol_version"`
+		Epoch int `json:"epoch"`
+		ProtocolVersion uint16 `json:"protocol_version"`
+
 	}
 
 	_ = json.Unmarshal(data, &payload)
@@ -691,6 +741,7 @@ func (g *mediaGateway) send(op int, data any) error {
 	if g.conn == nil {
 
 		return fmt.Errorf("%s gateway closed", g.label)
+
 	}
 
 	payload, err := json.Marshal(map[string]any{"op": op, "d": data})
@@ -698,6 +749,7 @@ func (g *mediaGateway) send(op int, data any) error {
 	if err != nil {
 
 		return err
+
 	}
 
 	return g.conn.WriteMessage(websocket.TextMessage, payload)
@@ -712,6 +764,7 @@ func (g *mediaGateway) sendBinary(op int, data []byte) error {
 	if g.conn == nil {
 
 		return fmt.Errorf("%s gateway closed", g.label)
+
 	}
 
 	buf := make([]byte, 1+len(data))
@@ -727,6 +780,7 @@ func (g *mediaGateway) setSpeaking(speaking bool, stream bool) {
 	if g.closed || g.peer == nil {
 
 		return
+
 	}
 
 	flag := 0
@@ -736,9 +790,11 @@ func (g *mediaGateway) setSpeaking(speaking bool, stream bool) {
 		if stream {
 
 			flag = 2
+
 		} else {
 
 			flag = 1
+
 		}
 
 	}
@@ -753,6 +809,7 @@ func (g *mediaGateway) setVideoAttributes(enabled bool, width, height, fps int) 
 	if g.closed || g.peer == nil {
 
 		return
+
 	}
 
 	if !enabled {
@@ -760,6 +817,7 @@ func (g *mediaGateway) setVideoAttributes(enabled bool, width, height, fps int) 
 		payload := map[string]any{"audio_ssrc": g.peer.audioSSRC, "video_ssrc": 0, "rtx_ssrc": 0, "streams": []any{}}
 		_ = g.send(voiceVideo, payload)
 		return
+
 	}
 
 	payload := map[string]any{
@@ -772,6 +830,7 @@ func (g *mediaGateway) setVideoAttributes(enabled bool, width, height, fps int) 
 			"type": "video", "rid": "100", "ssrc": g.peer.videoSSRC, "active": true, "quality": 100,
 			"rtx_ssrc": g.peer.rtxSSRC, "max_bitrate": 10_000_000, "max_framerate": fps,
 			"max_resolution": map[string]any{"type": "fixed", "width": width, "height": height},
+
 		}},
 
 	}
@@ -795,6 +854,7 @@ func (g *mediaGateway) stop() {
 	if conn != nil {
 
 		_ = conn.Close()
+
 	}
 
 	if readDone != nil {
@@ -803,6 +863,7 @@ func (g *mediaGateway) stop() {
 
 		case <-readDone:
 		case <-time.After(2 * time.Second):
+
 		}
 
 	}
@@ -811,6 +872,7 @@ func (g *mediaGateway) stop() {
 
 		g.peer.close()
 		g.peer = nil
+
 	}
 
 }
@@ -839,12 +901,13 @@ func newMediaPeer(gateway *mediaGateway, audioSSRC, videoSSRC, rtxSSRC int) *Med
 
 func (m *MediaPeer) negotiate() {
 
-	peer, err := libdc.NewPeer("stun:stun.l.google.com:19302")
+	peer, err := libdc.NewPeer(os.Getenv("WEBRTC_STUN_URL"))
 
 	if err != nil {
 
 		log.Printf("[streamer] libdatachannel peer: %v", err)
 		return
+
 	}
 
 	m.peer.Store(peer)
@@ -854,6 +917,7 @@ func (m *MediaPeer) negotiate() {
 		if !offer {
 
 			return
+
 		}
 
 		_ = m.gateway.send(voiceSelectProtocol, map[string]any{
@@ -863,6 +927,7 @@ func (m *MediaPeer) negotiate() {
 			"data": sdp,
 			"sdp": sdp,
 			"rtc_connection_id": uuid.NewString(),
+
 		})
 
 	})
@@ -873,6 +938,7 @@ func (m *MediaPeer) negotiate() {
 		m.peer.Store(nil)
 		peer.Destroy()
 		return
+
 	}
 
 	if err := peer.AddVideoTrack(uint32(m.videoSSRC), uint32(m.rtxSSRC), CodecH264.PayloadType, CodecH264.RtxPayloadType); err != nil {
@@ -881,6 +947,7 @@ func (m *MediaPeer) negotiate() {
 		m.peer.Store(nil)
 		peer.Destroy()
 		return
+
 	}
 
 	peer.CreateOffer()
@@ -894,6 +961,7 @@ func (m *MediaPeer) setRemoteDescription(sdp string) error {
 	if peer == nil {
 
 		return fmt.Errorf("peer connection not initialized")
+
 	}
 
 	return peer.SetRemoteAnswer(sdp)
@@ -907,6 +975,7 @@ func (m *MediaPeer) setupPacketizers() error {
 	if peer == nil {
 
 		return fmt.Errorf("peer connection not initialized")
+
 	}
 
 	return peer.SetupPacketizers(uint32(m.audioSSRC), CodecOpus.PayloadType, uint32(m.videoSSRC), CodecH264.PayloadType)
@@ -920,6 +989,7 @@ func (m *MediaPeer) sendReady() bool {
 	if m.closed.Load() || peer == nil {
 
 		return false
+
 	}
 
 	return peer.Connected() && peer.MediaReady() && m.mediaAllowed()
@@ -940,6 +1010,7 @@ func (m *MediaPeer) waitSendReady(ctx context.Context) error {
 				if err := m.setupPacketizers(); err != nil {
 
 					return err
+
 				}
 
 				m.packetizersReady.Store(true)
@@ -947,6 +1018,7 @@ func (m *MediaPeer) waitSendReady(ctx context.Context) error {
 			}
 
 			return nil
+
 		}
 
 		select {
@@ -955,6 +1027,7 @@ func (m *MediaPeer) waitSendReady(ctx context.Context) error {
 			peer := m.peer.Load()
 			return fmt.Errorf("send path not ready: connected=%v tracks=%v dave=%v: %w", peer != nil && peer.Connected(), peer != nil && peer.MediaReady(), m.mediaAllowed(), ctx.Err())
 		case <-ticker.C:
+
 		}
 
 	}
@@ -966,6 +1039,7 @@ func (m *MediaPeer) mediaAllowed() bool {
 	if m.gateway.dave == nil {
 
 		return true
+
 	}
 
 	return m.gateway.dave.MediaReady()
@@ -977,6 +1051,7 @@ func (m *MediaPeer) sendVideo(data []byte, duration time.Duration) {
 	if m.closed.Load() {
 
 		return
+
 	}
 
 	peer := m.peer.Load()
@@ -984,6 +1059,7 @@ func (m *MediaPeer) sendVideo(data []byte, duration time.Duration) {
 	if peer == nil {
 
 		return
+
 	}
 
 	data = rewriteH264SPSInto(&m.videoScratch, data)
@@ -993,6 +1069,7 @@ func (m *MediaPeer) sendVideo(data []byte, duration time.Duration) {
 	if err != nil {
 
 		encrypted = data
+
 	}
 
 	peer.SendVideo(encrypted, duration.Seconds()*1000)
@@ -1004,6 +1081,7 @@ func (m *MediaPeer) sendAudio(data []byte, duration time.Duration) {
 	if m.closed.Load() {
 
 		return
+
 	}
 
 	peer := m.peer.Load()
@@ -1011,6 +1089,7 @@ func (m *MediaPeer) sendAudio(data []byte, duration time.Duration) {
 	if peer == nil {
 
 		return
+
 	}
 
 	encrypted, err := m.gateway.dave.EncryptAudio(uint32(m.audioSSRC), data)
@@ -1018,6 +1097,7 @@ func (m *MediaPeer) sendAudio(data []byte, duration time.Duration) {
 	if err != nil {
 
 		encrypted = data
+
 	}
 
 	peer.SendAudio(encrypted, duration.Seconds()*1000)
@@ -1029,6 +1109,7 @@ func (m *MediaPeer) advanceAudio(duration time.Duration) {
 	if m.closed.Load() {
 
 		return
+
 	}
 
 	peer := m.peer.Load()
@@ -1036,6 +1117,7 @@ func (m *MediaPeer) advanceAudio(duration time.Duration) {
 	if peer == nil {
 
 		return
+
 	}
 
 	peer.AdvanceAudio(duration.Seconds() * 1000)
@@ -1047,6 +1129,7 @@ func (m *MediaPeer) advanceVideo(duration time.Duration) {
 	if m.closed.Load() {
 
 		return
+
 	}
 
 	peer := m.peer.Load()
@@ -1054,6 +1137,7 @@ func (m *MediaPeer) advanceVideo(duration time.Duration) {
 	if peer == nil {
 
 		return
+
 	}
 
 	peer.AdvanceVideo(duration.Seconds() * 1000)
@@ -1068,6 +1152,7 @@ func (m *MediaPeer) close() {
 	if m.closed.Load() {
 
 		return
+
 	}
 
 	m.closed.Store(true)
@@ -1075,6 +1160,7 @@ func (m *MediaPeer) close() {
 	if peer := m.peer.Swap(nil); peer != nil {
 
 		peer.Destroy()
+
 	}
 
 }
@@ -1094,6 +1180,7 @@ func parseStreamDaveChannelID(rtcServerID string) godave.ChannelID {
 	if id == 0 {
 
 		return 0
+
 	}
 
 	return godave.ChannelID(id - 1)

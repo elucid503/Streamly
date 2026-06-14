@@ -11,12 +11,14 @@ func IsHlsURL(raw string) bool {
 	if strings.HasSuffix(path, ".m3u8") || strings.HasSuffix(path, ".m3u") {
 
 		return true
+
 	}
 
 	// Proxied live playlists often omit a .m3u8 suffix in the path.
 	if strings.Contains(path, "/papi/tv/playlist/") || strings.Contains(path, "/api/proxy/playlist") {
 
 		return true
+
 	}
 
 	return false

@@ -100,6 +100,7 @@ func streamlyTranscodeEmit(user C.uintptr_t, kind C.int, data *C.uint8_t, length
 	if target == nil {
 
 		return
+
 	}
 
 	n := int(length)
@@ -112,6 +113,7 @@ func streamlyTranscodeEmit(user C.uintptr_t, kind C.int, data *C.uint8_t, length
 
 		PTS: time.Duration(int64(ptsMs)) * time.Millisecond,
 		Duration: time.Duration(int64(durMs)) * time.Millisecond,
+
 	}
 
 	channel := target.video
@@ -124,6 +126,7 @@ func streamlyTranscodeEmit(user C.uintptr_t, kind C.int, data *C.uint8_t, length
 		if packet.Duration <= 0 {
 
 			packet.Duration = opusPacketDuration(payload)
+
 		}
 
 	}
@@ -131,12 +134,14 @@ func streamlyTranscodeEmit(user C.uintptr_t, kind C.int, data *C.uint8_t, length
 	if !target.pause.Wait(target.ctx) {
 
 		return
+
 	}
 
 	select {
 
 	case channel <- packet:
 	case <-target.ctx.Done():
+
 	}
 
 }
@@ -149,6 +154,7 @@ func streamlyInputRead(user C.uintptr_t, buf *C.uint8_t, size C.int) C.int {
 	if target == nil || target.input == nil || size <= 0 {
 
 		return 0
+
 	}
 
 	out := unsafe.Slice((*byte)(buf), int(size))
@@ -158,6 +164,7 @@ func streamlyInputRead(user C.uintptr_t, buf *C.uint8_t, size C.int) C.int {
 		if target.ctx.Err() != nil {
 
 			return 0
+
 		}
 
 		n, err := target.input.Read(out)
@@ -165,16 +172,19 @@ func streamlyInputRead(user C.uintptr_t, buf *C.uint8_t, size C.int) C.int {
 		if n > 0 {
 
 			return C.int(n)
+
 		}
 
 		if err == io.EOF {
 
 			return 0
+
 		}
 
 		if err != nil {
 
 			return -1
+
 		}
 
 	}
@@ -189,11 +199,13 @@ func streamlyInputSeek(user C.uintptr_t, offset C.int64_t, whence C.int) C.int64
 	if target == nil || target.input == nil {
 
 		return -1
+
 	}
 
 	if whence == C.STREAMLY_SEEK_SIZE {
 
 		return C.int64_t(target.input.Size())
+
 	}
 
 	position, err := target.input.Seek(int64(offset), int(whence))
@@ -201,6 +213,7 @@ func streamlyInputSeek(user C.uintptr_t, offset C.int64_t, whence C.int) C.int64
 	if err != nil {
 
 		return -1
+
 	}
 
 	return C.int64_t(position)
@@ -215,6 +228,7 @@ func streamlyTranscodeMeta(user C.uintptr_t, durationMs C.int64_t) {
 	if target == nil {
 
 		return
+
 	}
 
 	target.probedDuration = int64(durationMs)
@@ -222,6 +236,7 @@ func streamlyTranscodeMeta(user C.uintptr_t, durationMs C.int64_t) {
 	if durationMs > 0 && target.onDuration != nil {
 
 		target.onDuration(int64(durationMs))
+
 	}
 
 }
@@ -234,6 +249,7 @@ func streamly_fill_ctas(user C.uintptr_t, params *C.transcode_params_t) {
 	if target == nil || target.supplyCTAs == nil || params == nil {
 
 		return
+
 	}
 
 	fontPath, windows := target.supplyCTAs(target.probedDuration, int64(params.start_ms))
@@ -243,9 +259,11 @@ func streamly_fill_ctas(user C.uintptr_t, params *C.transcode_params_t) {
 		if params.cta_font_path != nil {
 
 			C.free(unsafe.Pointer(params.cta_font_path))
+
 		}
 
 		params.cta_font_path = C.CString(fontPath)
+
 	}
 
 	fillCTAWindows(params, windows)
@@ -261,6 +279,7 @@ func fillCTAWindows(params *C.transcode_params_t, windows []CTAWindow) {
 		if ctaCount >= int(C.STREAMLY_MAX_CTA) || window.Text == "" {
 
 			continue
+
 		}
 
 		copyCTAText(&params.ctas[ctaCount].text[0], truncateCTAText(window.Text, ctaTextLimit))
@@ -279,6 +298,7 @@ type nativeState struct {
 
 	mu sync.Mutex
 	handle *C.transcode_handle_t
+
 }
 
 func (n *nativeState) release() *C.transcode_handle_t {
@@ -301,6 +321,7 @@ func (n *nativeState) encodePauseFrame(card *PauseCard, targetPTSMs int64) ([]by
 	if n.handle == nil {
 
 		return nil, fmt.Errorf("transcode already finished")
+
 	}
 
 	cCard := C.streamly_pause_card_t{
@@ -311,6 +332,7 @@ func (n *nativeState) encodePauseFrame(card *PauseCard, targetPTSMs int64) ([]by
 		cta: C.CString(card.CTA),
 
 		target_pts_ms: C.int64_t(targetPTSMs),
+
 	}
 
 	defer freeCString(cCard.font_path)
@@ -325,6 +347,7 @@ func (n *nativeState) encodePauseFrame(card *PauseCard, targetPTSMs int64) ([]by
 		if bodyCount >= int(C.STREAMLY_PAUSE_BODY_LINES) || line == "" {
 
 			continue
+
 		}
 
 		cCard.body[bodyCount] = C.CString(line)
@@ -339,6 +362,7 @@ func (n *nativeState) encodePauseFrame(card *PauseCard, targetPTSMs int64) ([]by
 		for i := 0; i < bodyCount; i++ {
 
 			freeCString(cCard.body[i])
+
 		}
 
 	}()
@@ -349,6 +373,7 @@ func (n *nativeState) encodePauseFrame(card *PauseCard, targetPTSMs int64) ([]by
 	if code := C.transcode_pause_frame(n.handle, &cCard, &data, &length); code != 0 {
 
 		return nil, fmt.Errorf("pause frame encode failed (%d)", int(code))
+
 	}
 
 	frame := C.GoBytes(unsafe.Pointer(data), length)
@@ -367,6 +392,7 @@ func startNative(request Request) (*Session, error) {
 
 		videoCap = videoPacketChannelCapLive
 		audioCap = audioPacketChannelCapLive
+
 	}
 
 	video := make(chan Packet, videoCap)
@@ -386,6 +412,7 @@ func startNative(request Request) (*Session, error) {
 		input: request.Source,
 		onDuration: request.OnDuration,
 		supplyCTAs: request.SupplyCTAs,
+
 	}
 
 	id := registerEmitTarget(target)
@@ -397,6 +424,7 @@ func startNative(request Request) (*Session, error) {
 		unregisterEmitTarget(id)
 
 		return nil, fmt.Errorf("failed to allocate abort flag")
+
 	}
 
 	*abortFlag = C.bool(false)
@@ -411,6 +439,7 @@ func startNative(request Request) (*Session, error) {
 		if abortFlag != nil {
 
 			*abortFlag = C.bool(true)
+
 		}
 
 	}
@@ -427,22 +456,26 @@ func startNative(request Request) (*Session, error) {
 	if request.SubtitlePath != "" {
 
 		subtitleCString = C.CString(request.SubtitlePath)
+
 	}
 
 	if request.FontsDir != "" {
 
 		fontsCString = C.CString(request.FontsDir)
+
 	}
 
 	if request.CTAFontPath != "" {
 
 		ctaFontCString = C.CString(request.CTAFontPath)
+
 	}
 
 	if request.InputURL != "" {
 
 		inputURLCString = C.CString(request.InputURL)
 		headersCString = C.CString(formatHTTPHeaders(request.Headers))
+
 	}
 
 	params := C.transcode_params_t{
@@ -468,6 +501,7 @@ func startNative(request Request) (*Session, error) {
 		meta_cb: C.streamly_meta_cb(C.streamlyTranscodeMeta),
 		emit_user: C.uintptr_t(id),
 		abort_flag: abortFlag,
+
 	}
 
 	fillCTAWindows(&params, request.CTAs)
@@ -476,6 +510,7 @@ func startNative(request Request) (*Session, error) {
 
 		params.read_cb = C.streamly_read_cb(C.streamlyInputRead)
 		params.seek_cb = C.streamly_seek_cb(C.streamlyInputSeek)
+
 	}
 
 	handle := C.transcode_start(&params)
@@ -496,6 +531,7 @@ func startNative(request Request) (*Session, error) {
 		abortMu.Unlock()
 
 		return nil, fmt.Errorf("failed to start libav transcode")
+
 	}
 
 	native := &nativeState{handle: handle}
@@ -513,9 +549,11 @@ func startNative(request Request) (*Session, error) {
 		if request.Context.Err() != nil {
 
 			doneErr = request.Context.Err()
+
 		} else if exitCode != 0 {
 
 			doneErr = transcodeError(handle, int(exitCode))
+
 		}
 
 		// Waits for any in-flight pause-card encode before the handle is freed.
@@ -539,12 +577,14 @@ func startNative(request Request) (*Session, error) {
 		Audio: audio,
 		Done: done,
 		pause: pause,
+
 	}
 
 	if request.PauseCard != nil {
 
 		session.card = request.PauseCard
 		session.encoder = native
+
 	}
 
 	return session, nil
@@ -556,6 +596,7 @@ func formatHTTPHeaders(headers map[string]string) string {
 	if len(headers) == 0 {
 
 		return ""
+
 	}
 
 	lines := make([]string, 0, len(headers))
@@ -568,6 +609,7 @@ func formatHTTPHeaders(headers map[string]string) string {
 		if key == "" || value == "" {
 
 			continue
+
 		}
 
 		lines = append(lines, key+": "+value)
@@ -577,6 +619,7 @@ func formatHTTPHeaders(headers map[string]string) string {
 	if len(lines) == 0 {
 
 		return ""
+
 	}
 
 	return strings.Join(lines, "\r\n") + "\r\n"
@@ -593,11 +636,13 @@ func transcodeError(handle *C.transcode_handle_t, exitCode int) error {
 	if idx := indexZero(errBuf); idx >= 0 {
 
 		msg = string(errBuf[:idx])
+
 	}
 
 	if msg == "" {
 
 		msg = fmt.Sprintf("libav transcode failed (%d)", exitCode)
+
 	}
 
 	return errors.New(msg)
@@ -609,6 +654,7 @@ func freeCString(value *C.char) {
 	if value != nil {
 
 		C.free(unsafe.Pointer(value))
+
 	}
 
 }
@@ -632,6 +678,7 @@ func truncateCTAText(text string, max int) string {
 	if len(text) <= max {
 
 		return text
+
 	}
 
 	cut := max
@@ -639,6 +686,7 @@ func truncateCTAText(text string, max int) string {
 	for cut > 0 && !utf8.RuneStart(text[cut]) {
 
 		cut--
+
 	}
 
 	return text[:cut]
@@ -652,6 +700,7 @@ func indexZero(buf []byte) int {
 		if b == 0 {
 
 			return i
+
 		}
 
 	}

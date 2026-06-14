@@ -20,6 +20,7 @@ func newVoiceConnection(streamer *Streamer, guildID *string, channelID, botID st
 		guildID: guildID,
 		channelID: channelID,
 		botID: botID,
+
 	}
 
 	conn.gateway = newMediaGateway("voice", conn.serverID(), botID, parseDaveChannelID(channelID), ready, true)
@@ -33,6 +34,7 @@ func (v *VoiceConnection) guildIDString() string {
 	if v.guildID == nil {
 
 		return ""
+
 	}
 
 	return *v.guildID
@@ -44,6 +46,7 @@ func (v *VoiceConnection) serverID() string {
 	if v.guildID != nil {
 
 		return *v.guildID
+
 	}
 
 	return v.channelID
@@ -55,6 +58,7 @@ func (v *VoiceConnection) streamType() string {
 	if v.guildID == nil {
 
 		return "call"
+
 	}
 
 	return "guild"
@@ -85,6 +89,7 @@ func (v *VoiceConnection) stop() {
 
 		v.streamConnection.stop()
 		v.streamConnection = nil
+
 	}
 
 	v.gateway.stop()

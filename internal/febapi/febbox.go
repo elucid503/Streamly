@@ -10,8 +10,13 @@ import (
 	"strings"
 )
 
-const febboxBaseURL = "https://www.febbox.com"
 const browserUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " + "(KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
+
+func febboxBase() string {
+
+	return strings.TrimRight(strings.TrimSpace(os.Getenv("FEBBOX_BASE_URL")), "/")
+
+}
 
 type FebboxOptions struct {
 
@@ -47,7 +52,7 @@ func NewFebboxClient(options FebboxOptions) *FebboxClient {
 
 func (c *FebboxClient) ListFiles(shareKey string, parentID any, cookie string) ([]FebboxFile, error) {
 
-	url := fmt.Sprintf("%s/file/file_share_list?share_key=%s&pwd=&parent_id=%v&is_html=0", febboxBaseURL, shareKey, parentID)
+	url := fmt.Sprintf("%s/file/file_share_list?share_key=%s&pwd=&parent_id=%v&is_html=0", febboxBase(), shareKey, parentID)
 
 	var data struct {
 
@@ -77,7 +82,7 @@ func (c *FebboxClient) GetLinks(shareKey string, fid any, cookie string) ([]File
 
 	}
 
-	url := fmt.Sprintf("%s/console/video_quality_list?fid=%v", febboxBaseURL, fid)
+	url := fmt.Sprintf("%s/console/video_quality_list?fid=%v", febboxBase(), fid)
 
 	var data struct {
 
@@ -140,7 +145,7 @@ func (c *FebboxClient) headers(shareKey, cookie string) map[string]string {
 
 	if shareKey != "" {
 
-		headers["referer"] = febboxBaseURL + "/share/" + shareKey
+		headers["referer"] = febboxBase() + "/share/" + shareKey
 
 	}
 

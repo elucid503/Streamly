@@ -5,13 +5,19 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"streamly/internal/textutil"
 )
 
-var baseURL = "https://api.tvmaze.com"
+func tvmazeBaseURL() string {
+
+	return strings.TrimRight(strings.TrimSpace(os.Getenv("TVMAZE_BASE_URL")), "/")
+
+}
 
 type Client struct {
 
@@ -20,6 +26,7 @@ type Client struct {
 	mu sync.Mutex
 	idCache map[string]int
 	epCache map[int]epEntry
+
 }
 
 type epEntry struct {
@@ -27,6 +34,7 @@ type epEntry struct {
 	eps []tvEpisode
 
 	expiry time.Time
+
 }
 
 type tvEpisode struct {
@@ -35,6 +43,7 @@ type tvEpisode struct {
 	Number int `json:"number"`
 
 	Name string `json:"name"`
+
 }
 
 const epCacheTTL = 24 * time.Hour
@@ -47,6 +56,7 @@ func NewClient() *Client {
 
 		idCache: make(map[string]int),
 		epCache: make(map[int]epEntry),
+
 	}
 
 }
@@ -58,6 +68,7 @@ func (c *Client) EpisodeTitles(imdbID string, season int) (map[int]string, error
 	if err != nil {
 
 		return nil, err
+
 	}
 
 	eps, err := c.episodes(tvID)
@@ -65,6 +76,7 @@ func (c *Client) EpisodeTitles(imdbID string, season int) (map[int]string, error
 	if err != nil {
 
 		return nil, err
+
 	}
 
 	titles := make(map[int]string)
@@ -74,6 +86,7 @@ func (c *Client) EpisodeTitles(imdbID string, season int) (map[int]string, error
 		if ep.Season == season && ep.Number > 0 && ep.Name != "" {
 
 			titles[ep.Number] = textutil.DecodeHTML(ep.Name)
+
 		}
 
 	}
@@ -91,6 +104,7 @@ func (c *Client) resolveID(imdbID string) (int, error) {
 		c.mu.Unlock()
 
 		return id, nil
+
 	}
 
 	c.mu.Unlock()
@@ -98,16 +112,19 @@ func (c *Client) resolveID(imdbID string) (int, error) {
 	var show struct {
 
 		ID int `json:"id"`
+
 	}
 
-	if err := c.getJSON(fmt.Sprintf("%s/lookup/shows?imdb=%s", baseURL, imdbID), &show); err != nil {
+	if err := c.getJSON(fmt.Sprintf("%s/lookup/shows?imdb=%s", tvmazeBaseURL(), imdbID), &show); err != nil {
 
 		return 0, err
+
 	}
 
 	if show.ID == 0 {
 
 		return 0, fmt.Errorf("tvmaze: show not found for imdb=%s", imdbID)
+
 	}
 
 	c.mu.Lock()
@@ -131,15 +148,17 @@ func (c *Client) episodes(tvID int) ([]tvEpisode, error) {
 		c.mu.Unlock()
 
 		return eps, nil
+
 	}
 
 	c.mu.Unlock()
 
 	var eps []tvEpisode
 
-	if err := c.getJSON(fmt.Sprintf("%s/shows/%d/episodes", baseURL, tvID), &eps); err != nil {
+	if err := c.getJSON(fmt.Sprintf("%s/shows/%d/episodes", tvmazeBaseURL(), tvID), &eps); err != nil {
 
 		return nil, err
+
 	}
 
 	c.mu.Lock()
@@ -148,6 +167,7 @@ func (c *Client) episodes(tvID int) ([]tvEpisode, error) {
 
 		eps: eps,
 		expiry: time.Now().Add(epCacheTTL),
+
 	}
 
 	c.mu.Unlock()
@@ -163,6 +183,7 @@ func (c *Client) getJSON(url string, dest any) error {
 	if err != nil {
 
 		return err
+
 	}
 
 	defer resp.Body.Close()
@@ -172,11 +193,13 @@ func (c *Client) getJSON(url string, dest any) error {
 	if err != nil {
 
 		return err
+
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 
 		return fmt.Errorf("tvmaze: %s → %s", url, resp.Status)
+
 	}
 
 	return json.Unmarshal(body, dest)

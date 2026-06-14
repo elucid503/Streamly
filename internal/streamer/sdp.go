@@ -12,8 +12,9 @@ func extractAckSDP(data json.RawMessage) string {
 
 	var ack struct {
 
-		SDP string`json:"sdp"`
-		Data string`json:"data"`
+		SDP string `json:"sdp"`
+		Data string `json:"data"`
+
 	}
 
 	_ = json.Unmarshal(data, &ack)
@@ -21,6 +22,7 @@ func extractAckSDP(data json.RawMessage) string {
 	if sdp := strings.TrimSpace(ack.SDP); sdp != "" {
 
 		return sdp
+
 	}
 
 	return strings.TrimSpace(ack.Data)
@@ -34,6 +36,7 @@ func prepareRemoteSDP(sdp string) string {
 	if sdp == "" {
 
 		return ""
+
 	}
 
 	return finalizeSDP(rewriteDiscordSDP(sdp))
@@ -55,11 +58,13 @@ func finalizeSDP(sdp string) string {
 	if sdp == "" {
 
 		return ""
+
 	}
 
 	if !strings.HasSuffix(sdp, "\r\n") {
 
 		sdp += "\r\n"
+
 	}
 
 	return sdp
@@ -93,6 +98,7 @@ func rewriteDiscordSDP(sdp string) string {
 			if len(fields) >= 2 && port == "" {
 
 				port = fields[1]
+
 			}
 
 		case strings.HasPrefix(line, "a=rtcp"):
@@ -101,6 +107,7 @@ func rewriteDiscordSDP(sdp string) string {
 			if len(parts) == 2 && port == "" {
 
 				port = strings.TrimSpace(parts[1])
+
 			}
 
 		case strings.HasPrefix(line, "a=ice-ufrag"):
@@ -113,6 +120,7 @@ func rewriteDiscordSDP(sdp string) string {
 			if candidate == "" {
 
 				candidate = line
+
 			}
 
 		}
@@ -122,11 +130,13 @@ func rewriteDiscordSDP(sdp string) string {
 	if port == "" {
 
 		port = "9"
+
 	}
 
 	if ip == "" {
 
 		ip = "c=IN IP4 127.0.0.1"
+
 	}
 
 	audioPayloadType := CodecOpus.PayloadType
@@ -195,6 +205,7 @@ a=rtcp-fb:%d transport-cc`,
 		audioSection,
 		videoSection,
 		videoRtpMap,
+
 	}, "\n")
 
 }

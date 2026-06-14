@@ -27,6 +27,7 @@ var popularUSSlugs = []string{
 	"national-geographic",
 	"cnbc-usa",
 	"bravo-usa",
+
 }
 
 func (catalog *ChannelCatalog) FindByID(ID string) (Channel, bool) {
@@ -117,6 +118,7 @@ func (catalog *ChannelCatalog) Search(query string, limit int) []Channel {
 	if query == "" {
 
 		return nil
+
 	}
 
 	var matches []Channel
@@ -199,6 +201,7 @@ func (catalog *ChannelCatalog) Sorted() []Channel {
 		if left != right {
 
 			return left < right
+
 		}
 
 		return strings.Compare(channels[i].Name, channels[j].Name) < 0

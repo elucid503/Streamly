@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -12,20 +13,24 @@ import (
 	"github.com/imroc/req/v3"
 )
 
-const (
+const subDLUserAgent = "Streamly v1.0"
 
-	subDLBaseURL = "https://api.subdl.com/api/v1"
-	subDLDownload = "https://dl.subdl.com"
-	subDLUserAgent = "Streamly v1.0"
+func subdlBaseURL() string {
 
-)
+	return strings.TrimRight(strings.TrimSpace(os.Getenv("SUBDL_BASE_URL")), "/")
+
+}
+
+func subdlDownloadURL() string {
+
+	return strings.TrimRight(strings.TrimSpace(os.Getenv("SUBDL_DOWNLOAD_URL")), "/")
+
+}
 
 var (
-
 	episodeTagRE = regexp.MustCompile(`(?i)(?:^|[.\s_-])s(\d{1,2})e(\d{1,2})(?:[.\s_-]|$)`)
 	episodeXRE = regexp.MustCompile(`(?i)(?:^|[.\s_-])(\d{1,2})x(\d{1,2})(?:[.\s_-]|$)`)
 	leadingEpisodeRE = regexp.MustCompile(`(?i)^(\d{1,2})\s+`)
-
 )
 
 type SubDLOptions struct {
@@ -239,7 +244,7 @@ func (c *SubDLClient) resolvePaths(ctx context.Context, query Query) ([]string, 
 
 	var response subdlSearchResponse
 
-	resp, err := c.http.R().SetContext(ctx). SetSuccessResult(&response).Get(subDLBaseURL + "/subtitles?" + params.Encode())
+	resp, err := c.http.R().SetContext(ctx).SetSuccessResult(&response).Get(subdlBaseURL() + "/subtitles?" + params.Encode())
 
 	if err != nil {
 
@@ -612,7 +617,7 @@ func (c *SubDLClient) downloadBytes(ctx context.Context, path string) ([]byte, e
 	}
 
 	// Free API keys search with api_key but download anonymously; api_key on dl.subdl.com requires a paid plan.
-	downloadURL := subDLDownload + path
+	downloadURL := subdlDownloadURL() + path
 
 	resp, err := c.http.R().SetContext(ctx).Get(downloadURL)
 

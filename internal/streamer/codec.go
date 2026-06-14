@@ -2,16 +2,16 @@ package streamer
 
 type CodecPayload struct {
 
-	Name string`json:"name"`
-	Type string`json:"type"`
-	ClockRate int`json:"clockRate"`
-	Priority int`json:"priority,omitempty"`
+	Name string `json:"name"`
+	Type string `json:"type"`
+	ClockRate int `json:"clockRate"`
+	Priority int `json:"priority,omitempty"`
 
-	PayloadType int`json:"payload_type"`
-	RtxPayloadType int`json:"rtx_payload_type,omitempty"`
+	PayloadType int `json:"payload_type"`
+	RtxPayloadType int `json:"rtx_payload_type,omitempty"`
 
-	Encode bool`json:"encode,omitempty"`
-	Decode bool`json:"decode,omitempty"`
+	Encode bool `json:"encode,omitempty"`
+	Decode bool `json:"decode,omitempty"`
 
 }
 

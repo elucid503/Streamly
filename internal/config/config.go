@@ -114,14 +114,7 @@ func FebboxStreamHeaders() map[string]string {
 
 func TVBaseURL() string {
 
-	base := strings.TrimSpace(os.Getenv("TV_BASE_URL"))
-
-	if base == "" {
-
-		return "https://dami-tv.pro"
-	}
-
-	return strings.TrimRight(base, "/")
+	return strings.TrimRight(strings.TrimSpace(os.Getenv("TV_BASE_URL")), "/")
 
 }
 

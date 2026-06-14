@@ -22,6 +22,7 @@ func (r *bitReader) readBits(count int) uint32 {
 	if count == 0 {
 
 		return 0
+
 	}
 
 	var result uint32
@@ -31,12 +32,14 @@ func (r *bitReader) readBits(count int) uint32 {
 		if r.byteOffset >= len(r.buf) {
 
 			panic("bitReader: bad byte offset")
+
 		}
 
 		if r.bitOffset == 0 && r.byteOffset >= 2 &&
 			r.buf[r.byteOffset-2] == 0 && r.buf[r.byteOffset-1] == 0 && r.buf[r.byteOffset] == 3 {
 
 			r.byteOffset++ // Skip the emulation-prevention byte.
+
 		}
 
 		if r.bitOffset == 0 && count >= 8 {
@@ -52,6 +55,7 @@ func (r *bitReader) readBits(count int) uint32 {
 			if room := 8 - r.bitOffset; room < numBits {
 
 				numBits = room
+
 			}
 
 			mask := (1 << numBits) - 1
@@ -64,6 +68,7 @@ func (r *bitReader) readBits(count int) uint32 {
 
 				r.bitOffset = 0
 				r.byteOffset++
+
 			}
 
 		}
@@ -81,6 +86,7 @@ func (r *bitReader) readUE() int {
 	for r.readBits(1) == 0 {
 
 		leading++
+
 	}
 
 	return (1 << leading) + int(r.readBits(leading)) - 1
@@ -94,6 +100,7 @@ func (r *bitReader) readSE() int {
 	if unsigned%2 == 0 {
 
 		return -unsigned / 2
+
 	}
 
 	return (unsigned + 1) / 2
@@ -119,6 +126,7 @@ func (w *bitWriter) flush() {
 	if w.pendingByte <= 3 && len(w.arr) >= 2 && w.arr[len(w.arr)-1] == 0 && w.arr[len(w.arr)-2] == 0 {
 
 		w.arr = append(w.arr, 3)
+
 	}
 
 	w.arr = append(w.arr, w.pendingByte)
@@ -155,6 +163,7 @@ func (w *bitWriter) writeBits(value uint32, count int) {
 			if count < numBits {
 
 				numBits = count
+
 			}
 
 			toWrite := (value >> (count - numBits)) & ((1 << numBits) - 1)
@@ -166,6 +175,7 @@ func (w *bitWriter) writeBits(value uint32, count int) {
 
 				w.bitOffset = 0
 				w.flush()
+
 			}
 
 		}
@@ -188,9 +198,11 @@ func (w *bitWriter) writeSE(value int) {
 	if value <= 0 {
 
 		w.writeUE(-2 * value)
+
 	} else {
 
 		w.writeUE(2*value - 1)
+
 	}
 
 }

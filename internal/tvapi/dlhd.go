@@ -10,8 +10,6 @@ import (
 	"strings"
 )
 
-const defaultDLHDBaseURL = "https://dlhd.pk"
-
 var (
 	iframeSrcPattern = regexp.MustCompile(`iframe src="([^"]+)"`)
 	atobSourcePattern = regexp.MustCompile(`source:\s*window\.atob\('([^']+)'\)`)
@@ -28,6 +26,7 @@ func (c *TVClient) resolveDLHD(daddyID string) (ResolvedStream, error) {
 	if err != nil {
 
 		return ResolvedStream{}, fmt.Errorf("fetch dlhd stream page: %w", err)
+
 	}
 
 	defer response.Body.Close()
@@ -37,11 +36,13 @@ func (c *TVClient) resolveDLHD(daddyID string) (ResolvedStream, error) {
 	if err != nil {
 
 		return ResolvedStream{}, fmt.Errorf("read dlhd stream page: %w", err)
+
 	}
 
 	if response.StatusCode != http.StatusOK {
 
 		return ResolvedStream{}, fmt.Errorf("fetch dlhd stream page: status %d", response.StatusCode)
+
 	}
 
 	embedURL, ok := extractIframeSrc(string(body))
@@ -49,6 +50,7 @@ func (c *TVClient) resolveDLHD(daddyID string) (ResolvedStream, error) {
 	if !ok {
 
 		return ResolvedStream{}, fmt.Errorf("dlhd stream page missing embed iframe")
+
 	}
 
 	embedURL = normalizeURL(embedURL, base)
@@ -58,6 +60,7 @@ func (c *TVClient) resolveDLHD(daddyID string) (ResolvedStream, error) {
 	if err != nil {
 
 		return ResolvedStream{}, fmt.Errorf("fetch dlhd embed: %w", err)
+
 	}
 
 	defer embedResponse.Body.Close()
@@ -67,11 +70,13 @@ func (c *TVClient) resolveDLHD(daddyID string) (ResolvedStream, error) {
 	if err != nil {
 
 		return ResolvedStream{}, fmt.Errorf("read dlhd embed: %w", err)
+
 	}
 
 	if embedResponse.StatusCode != http.StatusOK {
 
 		return ResolvedStream{}, fmt.Errorf("fetch dlhd embed: status %d", embedResponse.StatusCode)
+
 	}
 
 	playlistURL, ok := extractAtobSource(string(embedBody))
@@ -79,6 +84,7 @@ func (c *TVClient) resolveDLHD(daddyID string) (ResolvedStream, error) {
 	if !ok {
 
 		return ResolvedStream{}, fmt.Errorf("dlhd embed missing playlist source")
+
 	}
 
 	return ResolvedStream{
@@ -86,18 +92,14 @@ func (c *TVClient) resolveDLHD(daddyID string) (ResolvedStream, error) {
 		URL: playlistURL,
 
 		Referer: embedURL,
+
 	}, nil
 
 }
 
 func dlhdBaseURL() string {
 
-	if base := strings.TrimSpace(os.Getenv("TV_DLHD_BASE_URL")); base != "" {
-
-		return strings.TrimRight(base, "/")
-	}
-
-	return defaultDLHDBaseURL
+	return strings.TrimRight(strings.TrimSpace(os.Getenv("TV_DLHD_BASE_URL")), "/")
 
 }
 
@@ -108,6 +110,7 @@ func extractIframeSrc(page string) (string, bool) {
 	if len(match) < 2 {
 
 		return "", false
+
 	}
 
 	src := strings.TrimSpace(match[1])
@@ -115,6 +118,7 @@ func extractIframeSrc(page string) (string, bool) {
 	if src == "" {
 
 		return "", false
+
 	}
 
 	return src, true
@@ -128,6 +132,7 @@ func extractAtobSource(page string) (string, bool) {
 	if len(match) < 2 {
 
 		return "", false
+
 	}
 
 	decoded, err := base64.StdEncoding.DecodeString(match[1])
@@ -135,6 +140,7 @@ func extractAtobSource(page string) (string, bool) {
 	if err != nil {
 
 		return "", false
+
 	}
 
 	playlistURL := strings.TrimSpace(string(decoded))
@@ -142,6 +148,7 @@ func extractAtobSource(page string) (string, bool) {
 	if playlistURL == "" {
 
 		return "", false
+
 	}
 
 	return playlistURL, true
@@ -155,16 +162,19 @@ func normalizeURL(raw, base string) string {
 	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
 
 		return raw
+
 	}
 
 	if strings.HasPrefix(raw, "//") {
 
 		return "https:" + raw
+
 	}
 
 	if strings.HasPrefix(raw, "/") {
 
 		return strings.TrimRight(base, "/") + raw
+
 	}
 
 	return raw

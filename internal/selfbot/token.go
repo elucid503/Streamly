@@ -12,6 +12,7 @@ func sanitizeToken(token string) (string, error) {
 	if token == "" {
 
 		return "", fmt.Errorf("TOKEN_INVALID")
+
 	}
 
 	token = strings.TrimPrefix(token, "Bot ")
@@ -22,6 +23,7 @@ func sanitizeToken(token string) (string, error) {
 	if token == "" {
 
 		return "", fmt.Errorf("TOKEN_INVALID")
+
 	}
 
 	return token, nil

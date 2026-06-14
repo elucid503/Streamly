@@ -13,6 +13,7 @@ type RawEvent struct {
 
 	Type string
 	Data json.RawMessage
+
 }
 
 type Client struct {
@@ -34,6 +35,7 @@ func NewClient(token string) (*Client, error) {
 	if err != nil {
 
 		return nil, err
+
 	}
 
 	return &Client{
@@ -41,6 +43,7 @@ func NewClient(token string) (*Client, error) {
 		token: clean,
 		props: newProperties(),
 		events: make(chan RawEvent, 64),
+
 	}, nil
 
 }
@@ -50,6 +53,7 @@ func (c *Client) Login(ctx context.Context) error {
 	if err := validateToken(ctx, c.token, c.props); err != nil {
 
 		return err
+
 	}
 
 	c.gateway = newGateway(c)
@@ -57,6 +61,7 @@ func (c *Client) Login(ctx context.Context) error {
 	if err := c.gateway.connect(ctx); err != nil {
 
 		return err
+
 	}
 
 	go c.maintainGateway(ctx)
@@ -98,6 +103,7 @@ func (c *Client) Send(op int, data any) error {
 	if gateway == nil {
 
 		return fmt.Errorf("gateway not connected")
+
 	}
 
 	return gateway.send(op, data)
@@ -118,6 +124,7 @@ func (c *Client) maintainGateway(ctx context.Context) {
 		if current == nil {
 
 			return
+
 		}
 
 		select {
@@ -125,6 +132,7 @@ func (c *Client) maintainGateway(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-current.done:
+
 		}
 
 		sessionID, sequence, hasSequence := current.resumeState()
@@ -138,6 +146,7 @@ func (c *Client) maintainGateway(ctx context.Context) {
 			if ctx.Err() != nil {
 
 				return
+
 			}
 
 			next := newGateway(c)
@@ -147,6 +156,7 @@ func (c *Client) maintainGateway(ctx context.Context) {
 				next.sessionID = sessionID
 				next.sequence = sequence
 				next.hasSequence = hasSequence
+
 			}
 
 			c.mu.Lock()
@@ -158,6 +168,7 @@ func (c *Client) maintainGateway(ctx context.Context) {
 				log.Printf("[selfbot] gateway reconnect failed: %v", err)
 				backoff = min(backoff*2, maxBackoff)
 				continue
+
 			}
 
 			backoff = time.Second
@@ -177,6 +188,7 @@ func (c *Client) emit(event RawEvent) {
 	case c.events <- event:
 	default:
 		log.Printf("[selfbot] dropped gateway event: %s", event.Type)
+
 	}
 
 }

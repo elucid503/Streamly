@@ -6,6 +6,7 @@ type Country struct {
 	Name string `json:"name"`
 
 	Flag string `json:"flag"`
+
 }
 
 type Channel struct {
@@ -24,6 +25,7 @@ type Channel struct {
 	Status string `json:"status"`
 
 	Source string `json:"source"`
+
 }
 
 type ChannelCatalog struct {
@@ -36,6 +38,7 @@ type ChannelCatalog struct {
 	StreamAPI string `json:"streamApi"`
 
 	Channels []Channel `json:"channels"`
+
 }
 
 type ResolveResult struct {
@@ -44,6 +47,7 @@ type ResolveResult struct {
 	Stream string `json:"stream"`
 
 	Error string `json:"error"`
+
 }
 
 type TV247ResolveResult struct {
@@ -54,6 +58,7 @@ type TV247ResolveResult struct {
 	ProxyPlayerURL string `json:"proxyPlayerUrl"`
 
 	Error string `json:"error"`
+
 }
 
 type ResolvedStream struct {
@@ -61,6 +66,7 @@ type ResolvedStream struct {
 	URL string
 
 	Referer string
+
 }
 
 type StreamInfo struct {
@@ -68,4 +74,5 @@ type StreamInfo struct {
 	Channel Channel
 
 	HLSURL string
+
 }

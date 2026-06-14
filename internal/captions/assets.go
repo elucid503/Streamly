@@ -62,6 +62,7 @@ func candidateFontPaths() []string {
 	candidates := []string{
 
 		filepath.Join("assets", fontName),
+
 	}
 
 	if dir := os.Getenv("STREAMLY_ASSETS_DIR"); dir != "" {

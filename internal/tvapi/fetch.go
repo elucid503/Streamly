@@ -23,6 +23,7 @@ type catalogProvider struct {
 	name string
 
 	url string
+
 }
 
 func seedEmbeddedCatalog(c *TVClient) {
@@ -33,6 +34,7 @@ func seedEmbeddedCatalog(c *TVClient) {
 
 		log.Printf("[tvapi] embedded catalog unavailable: %v", err)
 		return
+
 	}
 
 	c.storeCatalog(catalog)
@@ -44,6 +46,7 @@ func (c *TVClient) ListChannels() (*ChannelCatalog, error) {
 	if cached := c.anyCatalog(); cached != nil {
 
 		return cached, nil
+
 	}
 
 	return nil, fmt.Errorf("catalog unavailable")
@@ -55,11 +58,13 @@ func (c *TVClient) Warmup() {
 	if c.anyCatalog() == nil {
 
 		seedEmbeddedCatalog(c)
+
 	}
 
 	c.refreshOnce.Do(func() {
 
 		go c.runCatalogRefreshLoop()
+
 	})
 
 }
@@ -74,6 +79,7 @@ func (c *TVClient) runCatalogRefreshLoop() {
 	for range ticker.C {
 
 		c.refreshCatalog()
+
 	}
 
 }
@@ -83,6 +89,7 @@ func (c *TVClient) refreshCatalog() {
 	if _, err := c.fetchCatalog(catalogRefreshTimeout); err != nil {
 
 		log.Printf("[tvapi] catalog refresh failed: %v", err)
+
 	}
 
 }
@@ -104,6 +111,7 @@ func (c *TVClient) fetchCatalog(timeout time.Duration) (*ChannelCatalog, error) 
 			log.Printf("[tvapi] catalog refreshed from %s (%d channels)", provider.name, len(catalog.Channels))
 
 			return catalog, nil
+
 		}
 
 		log.Printf("[tvapi] catalog provider %s failed: %v", provider.name, err)
@@ -123,6 +131,7 @@ func (c *TVClient) fetchFromProvider(client *http.Client, provider catalogProvid
 	if err != nil {
 
 		return nil, err
+
 	}
 
 	referer := providerReferer(provider.url)
@@ -138,6 +147,7 @@ func (c *TVClient) fetchFromProvider(client *http.Client, provider catalogProvid
 	if err != nil {
 
 		return nil, err
+
 	}
 
 	defer response.Body.Close()
@@ -155,6 +165,7 @@ func (c *TVClient) fetchFromProvider(client *http.Client, provider catalogProvid
 	if err != nil {
 
 		return nil, err
+
 	}
 
 	return parseCatalogJSON(body)
@@ -174,6 +185,7 @@ func (c *TVClient) catalogProviders() []catalogProvider {
 		if rawURL == "" {
 
 			return
+
 		}
 
 		url := normalizeCatalogURL(rawURL)
@@ -181,6 +193,7 @@ func (c *TVClient) catalogProviders() []catalogProvider {
 		if _, ok := seen[url]; ok {
 
 			return
+
 		}
 
 		seen[url] = struct{}{}
@@ -188,6 +201,7 @@ func (c *TVClient) catalogProviders() []catalogProvider {
 		if name == "" {
 
 			name = url
+
 		}
 
 		providers = append(providers, catalogProvider{
@@ -195,6 +209,7 @@ func (c *TVClient) catalogProviders() []catalogProvider {
 			name: name,
 
 			url: url,
+
 		})
 
 	}
@@ -202,6 +217,7 @@ func (c *TVClient) catalogProviders() []catalogProvider {
 	for index, rawURL := range catalogURLCandidates() {
 
 		add(fmt.Sprintf("catalog-%d", index+1), rawURL)
+
 	}
 
 	return providers
@@ -220,23 +236,25 @@ func catalogURLCandidates() []string {
 			if trimmed := strings.TrimSpace(part); trimmed != "" {
 
 				candidates = append(candidates, trimmed)
+
 			}
 
 		}
 
 		if len(candidates) > 0 {
 
-			return candidates
+			return candidates // explicitly provided URLs take precedence
+
 		}
 
 	}
 
 	if base := strings.TrimSpace(os.Getenv("TV_BASE_URL")); base != "" {
 
-		return []string{base}
+		return []string{base} // a base URL can be used as a fallback
 	}
 
-	return []string{defaultBaseURL}
+	return []string{""} // nothing provided, will rely on embedded catalog
 
 }
 
@@ -247,6 +265,7 @@ func normalizeCatalogURL(rawURL string) string {
 	if strings.Contains(rawURL, "tv-channels.json") {
 
 		return rawURL
+
 	}
 
 	return strings.TrimRight(rawURL, "/") + channelsPath
@@ -262,11 +281,20 @@ func providerReferer(rawURL string) string {
 		if len(parts) > 0 && parts[0] != "" {
 
 			return "https://" + parts[0] + "/"
+
 		}
 
 	}
 
-	return defaultBaseURL + "/"
+	base := os.Getenv("TV_BASE_URL")
+
+	if base != "" {
+
+		return normalizeCatalogURL(base)
+
+	}
+
+	return base + "/"
 
 }
 
@@ -277,11 +305,13 @@ func parseCatalogJSON(body []byte) (*ChannelCatalog, error) {
 	if err := json.Unmarshal(body, &catalog); err != nil {
 
 		return nil, fmt.Errorf("decode channels: %w", err)
+
 	}
 
 	if len(catalog.Channels) == 0 {
 
 		return nil, fmt.Errorf("decode channels: empty catalog")
+
 	}
 
 	return &catalog, nil
@@ -302,6 +332,7 @@ func (c *TVClient) anyCatalog() *ChannelCatalog {
 	if c.catalog == nil {
 
 		return nil
+
 	}
 
 	copy := *c.catalog

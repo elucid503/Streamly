@@ -3,6 +3,7 @@ package introdb
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -10,12 +11,7 @@ import (
 	"github.com/imroc/req/v3"
 )
 
-const (
-
-	defaultBaseURL = "https://api.theintrodb.org/v3"
-	userAgent = "streamly/1.0"
-
-)
+const userAgent = "streamly/1.0"
 
 type ClientOptions struct {
 
@@ -60,21 +56,25 @@ type Client struct {
 
 func NewClient(options ...ClientOptions) *Client {
 
+	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("INTRODB_BASE_URL")), "/")
+
 	client := &Client{
 
-		baseURL: defaultBaseURL,
+		baseURL: baseURL,
 		http: req.C().SetTimeout(15 * time.Second).SetUserAgent(userAgent).ImpersonateChrome(),
 
 	}
 
 	if len(options) > 0 {
 
-		if baseURL := strings.TrimSpace(options[0].BaseURL); baseURL != "" {
+		if optURL := strings.TrimSpace(options[0].BaseURL); optURL != "" {
 
-			client.baseURL = strings.TrimRight(baseURL, "/")
+			client.baseURL = strings.TrimRight(optURL, "/")
+
 		}
 
 		client.apiKey = strings.TrimSpace(options[0].APIKey)
+
 	}
 
 	return client

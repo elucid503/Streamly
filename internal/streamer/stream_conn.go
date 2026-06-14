@@ -21,6 +21,7 @@ func (s *StreamConnection) setSession(sessionID string) {
 	if s.rtcServerID == "" {
 
 		return
+
 	}
 
 	s.gateway.serverID = s.rtcServerID

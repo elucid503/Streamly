@@ -29,11 +29,27 @@ var showbox = struct {
 
 }{
 
-	baseURL: "https://mbpapi.shegu.net/api/api_client/index/",
+	baseURL: "",
 
 	appKey: "moviebox",
 	iv: "wEiphTn!",
 	key: "123d6cedf626dy54233aa1w6",
+
+}
+
+func init() {
+
+	if v := strings.TrimSpace(os.Getenv("SHOWBOX_API_URL")); v != "" {
+
+		showbox.baseURL = strings.TrimRight(v, "/") + "/"
+
+	}
+
+}
+
+func showboxMediaBaseURL() string {
+
+	return strings.TrimRight(strings.TrimSpace(os.Getenv("SHOWBOX_MEDIA_URL")), "/")
 
 }
 
@@ -363,7 +379,7 @@ func (c *ShowboxClient) GetEpisodeList(showID, season int) (map[int]string, erro
 
 func (c *ShowboxClient) GetFebBoxID(id int, boxType BoxType) (string, error) {
 
-	endpoint := fmt.Sprintf("https://www.showbox.media/index/share_link?id=%d&type=%d", id, boxType)
+	endpoint := fmt.Sprintf("%s/index/share_link?id=%d&type=%d", showboxMediaBaseURL(), id, boxType)
 
 	response, err := c.client.Get(endpoint)
 

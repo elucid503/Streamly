@@ -12,6 +12,7 @@ func (c *TVClient) ResolveStream(daddyID string) (ResolvedStream, error) {
 	if daddyID == "" {
 
 		return ResolvedStream{}, fmt.Errorf("daddyId is required")
+
 	}
 
 	stream, err := c.resolveDLHD(daddyID)
@@ -19,11 +20,13 @@ func (c *TVClient) ResolveStream(daddyID string) (ResolvedStream, error) {
 	if err != nil {
 
 		return ResolvedStream{}, err
+
 	}
 
 	if !isHLSPlaylistURL(stream.URL) {
 
 		return ResolvedStream{}, fmt.Errorf("not an hls playlist: %s", stream.URL)
+
 	}
 
 	return stream, nil
@@ -39,6 +42,7 @@ func isHLSPlaylistURL(raw string) bool {
 	if strings.HasSuffix(path, ".m3u8") || strings.HasSuffix(path, ".m3u") {
 
 		return true
+
 	}
 
 	return strings.Contains(path, "/papi/tv/playlist/")

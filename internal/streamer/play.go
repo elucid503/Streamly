@@ -21,6 +21,7 @@ type Playback struct {
 	streamer *Streamer
 	streamConn *StreamConnection
 	sender *mediaSender
+
 }
 
 func OpenPlayback(ctx context.Context, s *Streamer) (*Playback, error) {
@@ -28,6 +29,7 @@ func OpenPlayback(ctx context.Context, s *Streamer) (*Playback, error) {
 	if s.VoiceConnection() == nil {
 
 		return nil, fmt.Errorf("not connected to a voice channel")
+
 	}
 
 	streamConn, err := s.CreateStream(ctx)
@@ -35,6 +37,7 @@ func OpenPlayback(ctx context.Context, s *Streamer) (*Playback, error) {
 	if err != nil {
 
 		return nil, err
+
 	}
 
 	readyCtx, readyCancel := context.WithTimeout(ctx, 15*time.Second)
@@ -47,6 +50,7 @@ func OpenPlayback(ctx context.Context, s *Streamer) (*Playback, error) {
 		s.StopStream()
 
 		return nil, fmt.Errorf("stream not ready: %w", err)
+
 	}
 
 	return &Playback{streamer: s, streamConn: streamConn, sender: sender}, nil
@@ -86,6 +90,7 @@ type mediaSender struct {
 	rtpMu sync.Mutex
 	lastRTPAt time.Time
 	gapPending bool
+
 }
 
 func (s *mediaSender) beginSegment() {
@@ -109,6 +114,7 @@ func (s *mediaSender) beginSegment() {
 		if peer := s.activePeer; peer != nil && !peer.closed.Load() {
 
 			s.streamConn.setSpeaking(true)
+
 		}
 
 	}
@@ -126,6 +132,7 @@ func (s *mediaSender) markRTP() {
 func segmentSpliceNeedsAudioResync(pending bool, lastRTPAt time.Time) bool {
 
 	return pending && !lastRTPAt.IsZero()
+
 }
 
 func (s *mediaSender) applySegmentGap(peer *MediaPeer) {
@@ -142,6 +149,7 @@ func (s *mediaSender) applySegmentGap(peer *MediaPeer) {
 	if !segmentSpliceNeedsAudioResync(pending, last) {
 
 		return
+
 	}
 
 	gap := time.Since(last)
@@ -149,6 +157,7 @@ func (s *mediaSender) applySegmentGap(peer *MediaPeer) {
 	if gap <= 0 {
 
 		return
+
 	}
 
 	peer.advanceAudio(gap)
@@ -163,6 +172,7 @@ func (s *mediaSender) resolvePeer(ctx context.Context) (*MediaPeer, error) {
 	if s.activePeer != nil && s.activePeer.closed.Load() {
 
 		s.activePeer = nil
+
 	}
 
 	peer := s.streamConn.peer()
@@ -184,6 +194,7 @@ func (s *mediaSender) resolvePeer(ctx context.Context) (*MediaPeer, error) {
 				if peer != nil && !peer.closed.Load() {
 
 					goto found
+
 				}
 
 			}
@@ -197,11 +208,13 @@ found:
 	if peer == s.activePeer {
 
 		return peer, nil
+
 	}
 
 	if err := peer.waitSendReady(ctx); err != nil {
 
 		return nil, err
+
 	}
 
 	s.activePeer = peer
@@ -230,6 +243,7 @@ func (s *mediaSender) run(ctx context.Context, ts *transcode.Session) error {
 
 			first = err
 			cancel()
+
 		}
 
 	}
@@ -244,6 +258,7 @@ func (s *mediaSender) holdWhilePaused(ctx context.Context, ts *transcode.Session
 	if kind != transcode.KindVideo {
 
 		return ts.WaitIfPaused(ctx)
+
 	}
 
 	for ts.IsPaused() {
@@ -255,6 +270,7 @@ func (s *mediaSender) holdWhilePaused(ctx context.Context, ts *transcode.Session
 		case <-ctx.Done():
 			return false
 		case <-time.After(pauseFrameInterval):
+
 		}
 
 	}
@@ -270,6 +286,7 @@ func (s *mediaSender) sendPauseFrame(ctx context.Context, ts *transcode.Session)
 	if !ok {
 
 		return
+
 	}
 
 	peer, err := s.resolvePeer(ctx)
@@ -277,6 +294,7 @@ func (s *mediaSender) sendPauseFrame(ctx context.Context, ts *transcode.Session)
 	if err != nil {
 
 		return
+
 	}
 
 	s.applySegmentGap(peer)
@@ -297,6 +315,7 @@ func (s *mediaSender) sendLoadingFrame(ctx context.Context, ts *transcode.Sessio
 	if !ok {
 
 		return
+
 	}
 
 	peer, err := s.resolvePeer(ctx)
@@ -304,6 +323,7 @@ func (s *mediaSender) sendLoadingFrame(ctx context.Context, ts *transcode.Sessio
 	if err != nil {
 
 		return
+
 	}
 
 	s.applySegmentGap(peer)
@@ -328,6 +348,7 @@ func (s *mediaSender) applyLoadingHold(peer *MediaPeer) {
 	if duration <= 0 {
 
 		return
+
 	}
 
 	s.clock.shift(duration)
@@ -345,12 +366,14 @@ func (s *mediaSender) consumeVideoDrop(frame []byte) bool {
 	if !s.dropToIDR {
 
 		return false
+
 	}
 
 	if h264ContainsIDR(frame) {
 
 		s.dropToIDR = false
 		return false
+
 	}
 
 	return true
@@ -367,6 +390,7 @@ func (s *mediaSender) nextPacket(ctx context.Context, ts *transcode.Session, pac
 			return transcode.Packet{}, false, ctx.Err()
 		case packet, ok := <-packets:
 			return packet, ok, nil
+
 		}
 
 	}
@@ -385,6 +409,7 @@ func (s *mediaSender) nextPacket(ctx context.Context, ts *transcode.Session, pac
 		case <-timer.C:
 			s.sendLoadingFrame(ctx, ts)
 			timer.Reset(pauseFrameInterval)
+
 		}
 
 	}
@@ -398,6 +423,7 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 		if !s.holdWhilePaused(ctx, ts, kind) {
 
 			return ctx.Err()
+
 		}
 
 		s.applyPauseEvent(ts)
@@ -407,16 +433,19 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 		if err != nil {
 
 			return err
+
 		}
 
 		if !ok {
 
 			return nil
+
 		}
 
 		if !s.holdWhilePaused(ctx, ts, kind) {
 
 			return ctx.Err()
+
 		}
 
 		s.applyPauseEvent(ts)
@@ -424,6 +453,7 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 		if !s.clock.wait(ctx, packet.PTS, 0) {
 
 			return ctx.Err()
+
 		}
 
 		duration := packet.Duration
@@ -431,9 +461,11 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 		if kind == transcode.KindVideo {
 
 			duration = frametime(kind)
+
 		} else if duration <= 0 {
 
 			duration = frametime(kind)
+
 		}
 
 		peer, err := s.resolvePeer(ctx)
@@ -441,6 +473,7 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 		if err != nil {
 
 			return err
+
 		}
 
 		s.applySegmentGap(peer)
@@ -454,6 +487,7 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 				s.markRTP()
 
 				continue
+
 			}
 
 			peer.sendVideo(packet.Data, duration)
@@ -465,10 +499,12 @@ func (s *mediaSender) pump(ctx context.Context, ts *transcode.Session, packets <
 			if late := s.clock.lateness(packet.PTS); late > bufferHoldThreshold {
 
 				s.clock.shift(late)
+
 			}
 
 			peer.sendAudio(packet.Data, duration)
 			s.markRTP()
+
 		}
 
 	}
@@ -485,6 +521,7 @@ func (s *mediaSender) applyPauseEvent(ts *transcode.Session) {
 	if epoch == s.pauseEpoch {
 
 		return
+
 	}
 
 	s.pauseEpoch = epoch
@@ -492,6 +529,7 @@ func (s *mediaSender) applyPauseEvent(ts *transcode.Session) {
 	if duration <= 0 {
 
 		return
+
 	}
 
 	// pauseSent already advanced video RTP; fold any overshoot into audio so both tracks stay aligned.
@@ -505,11 +543,13 @@ func (s *mediaSender) applyPauseEvent(ts *transcode.Session) {
 
 		audioGap -= videoGap
 		videoGap = 0
+
 	}
 
 	if sent > 0 {
 
 		s.dropToIDR = true
+
 	}
 
 	if peer := s.activePeer; peer != nil {
@@ -520,9 +560,11 @@ func (s *mediaSender) applyPauseEvent(ts *transcode.Session) {
 		if videoGap > 0 {
 
 			peer.advanceVideo(videoGap)
+
 		}
 
 		s.markRTP()
+
 	}
 
 }
@@ -533,6 +575,7 @@ type mediaClock struct {
 	wallStart time.Time
 	ptsStart time.Duration
 	anchored bool
+
 }
 
 func (c *mediaClock) wait(ctx context.Context, pts time.Duration, extraDelay time.Duration) bool {
@@ -547,6 +590,7 @@ func (c *mediaClock) wait(ctx context.Context, pts time.Duration, extraDelay tim
 		c.mu.Unlock()
 
 		return true
+
 	}
 
 	sleep := (pts - c.ptsStart) - time.Since(c.wallStart)
@@ -555,11 +599,13 @@ func (c *mediaClock) wait(ctx context.Context, pts time.Duration, extraDelay tim
 	if extraDelay > 0 {
 
 		sleep += extraDelay
+
 	}
 
 	if sleep <= 0 {
 
 		return true
+
 	}
 
 	timer := time.NewTimer(sleep)
@@ -573,6 +619,7 @@ func (c *mediaClock) wait(ctx context.Context, pts time.Duration, extraDelay tim
 
 			case <-timer.C:
 			default:
+
 			}
 
 		}
@@ -580,6 +627,7 @@ func (c *mediaClock) wait(ctx context.Context, pts time.Duration, extraDelay tim
 		return false
 	case <-timer.C:
 		return true
+
 	}
 
 }
@@ -592,6 +640,7 @@ func (c *mediaClock) lateness(pts time.Duration) time.Duration {
 	if !c.anchored {
 
 		return 0
+
 	}
 
 	expected := pts - c.ptsStart
@@ -600,6 +649,7 @@ func (c *mediaClock) lateness(pts time.Duration) time.Duration {
 	if actual <= expected {
 
 		return 0
+
 	}
 
 	return actual - expected
@@ -611,6 +661,7 @@ func (c *mediaClock) shift(duration time.Duration) {
 	if duration <= 0 {
 
 		return
+
 	}
 
 	c.mu.Lock()
@@ -619,6 +670,7 @@ func (c *mediaClock) shift(duration time.Duration) {
 	if c.anchored {
 
 		c.wallStart = c.wallStart.Add(duration)
+
 	}
 
 }
@@ -641,6 +693,7 @@ func frametime(kind transcode.Kind) time.Duration {
 		if fps <= 0 {
 
 			fps = 30
+
 		}
 
 		return time.Second / time.Duration(fps)

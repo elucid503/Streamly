@@ -16,6 +16,7 @@ func h264ContainsIDR(frame []byte) bool {
 		if len(nalu) > 0 && nalu[0]&0x1f == h264NalTypeIDR {
 
 			return true
+
 		}
 
 	}
@@ -27,6 +28,7 @@ func h264ContainsIDR(frame []byte) bool {
 func rewriteH264SPS(frame []byte) []byte {
 
 	return rewriteH264SPSInto(nil, frame)
+
 }
 
 func rewriteH264SPSInto(scratch *[]byte, frame []byte) []byte {
@@ -42,6 +44,7 @@ func rewriteH264SPSInto(scratch *[]byte, frame []byte) []byte {
 
 				nalus[i] = out
 				rewritten = true
+
 			}
 
 		}
@@ -51,6 +54,7 @@ func rewriteH264SPSInto(scratch *[]byte, frame []byte) []byte {
 	if !rewritten {
 
 		return frame
+
 	}
 
 	need := len(frame)
@@ -58,6 +62,7 @@ func rewriteH264SPSInto(scratch *[]byte, frame []byte) []byte {
 	for _, nalu := range nalus {
 
 		need += len(startCode3) + len(nalu)
+
 	}
 
 	buf := growByteScratch(scratch, need)[:0]
@@ -66,11 +71,13 @@ func rewriteH264SPSInto(scratch *[]byte, frame []byte) []byte {
 
 		buf = append(buf, startCode3...)
 		buf = append(buf, nalu...)
+
 	}
 
 	if scratch != nil {
 
 		*scratch = buf
+
 	}
 
 	return buf
@@ -83,11 +90,13 @@ func growByteScratch(scratch *[]byte, need int) []byte {
 
 		buf := make([]byte, 0, need)
 		return buf
+
 	}
 
 	if cap(*scratch) >= need {
 
 		return *scratch
+
 	}
 
 	*scratch = make([]byte, 0, need)
@@ -110,6 +119,7 @@ func splitNALUs(buf []byte) [][]byte {
 
 			pos--
 			length++
+
 		}
 
 		var nalu []byte
@@ -118,15 +128,18 @@ func splitNALUs(buf []byte) [][]byte {
 
 			nalu = temp
 			temp = nil
+
 		} else {
 
 			nalu = temp[:pos]
 			temp = temp[pos+length:]
+
 		}
 
 		if len(nalu) > 0 {
 
 			nalus = append(nalus, nalu)
+
 		}
 
 	}
@@ -142,6 +155,7 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 		if recover() != nil {
 
 			out = nil
+
 		}
 
 	}()
@@ -169,6 +183,7 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 		if chromaFormatIDC == 3 {
 
 			writer.writeBits(reader.readBits(1), 1)
+
 		}
 
 		writer.writeUE(reader.readUE())
@@ -185,6 +200,7 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 			if chromaFormatIDC == 3 {
 
 				count = 12
+
 			}
 
 			for i := 0; i < count; i++ {
@@ -199,6 +215,7 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 					if i < 6 {
 
 						size = 16
+
 					}
 
 					lastScale := 8
@@ -212,6 +229,7 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 						if nextScale != 0 {
 
 							lastScale = nextScale
+
 						}
 
 					}
@@ -245,6 +263,7 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 		for i := 0; i < num; i++ {
 
 			writer.writeSE(reader.readSE())
+
 		}
 
 	}
@@ -262,6 +281,7 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 	if frameMbsOnly == 0 {
 
 		writer.writeBits(reader.readBits(1), 1)
+
 	}
 
 	writer.writeBits(reader.readBits(1), 1)
@@ -275,6 +295,7 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 		writer.writeUE(reader.readUE())
 		writer.writeUE(reader.readUE())
 		writer.writeUE(reader.readUE())
+
 	}
 
 	// Forces max_num_reorder_frames to 0 so Discord's decoder accepts the stream.
@@ -287,6 +308,7 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 		writer.writeUE(16)
 		writer.writeUE(0)
 		writer.writeUE(maxNumRefFrames)
+
 	}
 
 	vuiPresent := reader.readBits(1)
@@ -314,6 +336,7 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 
 				writer.writeBits(reader.readBits(16), 16)
 				writer.writeBits(reader.readBits(16), 16)
+
 			}
 
 		}
@@ -324,6 +347,7 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 		if overscanPresent != 0 {
 
 			writer.writeBits(reader.readBits(1), 1)
+
 		}
 
 		// Read but drop the video signal type.
@@ -341,6 +365,7 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 				reader.readBits(8)
 				reader.readBits(8)
 				reader.readBits(8)
+
 			}
 
 		}
@@ -352,6 +377,7 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 
 			writer.writeUE(reader.readUE())
 			writer.writeUE(reader.readUE())
+
 		}
 
 		timingInfoPresent := reader.readBits(1)
@@ -362,6 +388,7 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 			writer.writeBits(reader.readBits(32), 32)
 			writer.writeBits(reader.readBits(32), 32)
 			writer.writeBits(reader.readBits(1), 1)
+
 		}
 
 		nalHRDPresent := reader.readBits(1)
@@ -370,6 +397,7 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 		if nalHRDPresent != 0 {
 
 			copyHRDParameters(reader, writer)
+
 		}
 
 		vclHRDPresent := reader.readBits(1)
@@ -378,11 +406,13 @@ func rewriteSPSVUI(sps []byte) (out []byte) {
 		if vclHRDPresent != 0 {
 
 			copyHRDParameters(reader, writer)
+
 		}
 
 		if nalHRDPresent != 0 || vclHRDPresent != 0 {
 
 			writer.writeBits(reader.readBits(1), 1)
+
 		}
 
 		writer.writeBits(reader.readBits(1), 1)
@@ -429,6 +459,7 @@ func copyHRDParameters(reader *bitReader, writer *bitWriter) {
 		writer.writeUE(reader.readUE())
 		writer.writeUE(reader.readUE())
 		writer.writeBits(reader.readBits(1), 1)
+
 	}
 
 	writer.writeBits(reader.readBits(5), 5)

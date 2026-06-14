@@ -2,13 +2,24 @@ package selfbot
 
 import (
 	"net/http"
+	"os"
+	"strings"
 	"time"
 )
 
-const (
-	apiVersion = "9"
-	apiBase = "https://discord.com/api/v" + apiVersion
-)
+const apiVersion = "9"
+
+func discordBaseURL() string {
+
+	return strings.TrimRight(os.Getenv("DISCORD_BASE_URL"), "/")
+
+}
+
+func discordAPIBase() string {
+
+	return discordBaseURL() + "/api/v" + apiVersion
+
+}
 
 func restHeaders(props Properties) http.Header {
 
@@ -17,9 +28,9 @@ func restHeaders(props Properties) http.Header {
 		"Accept": []string{"*/*"},
 		"Accept-Language": []string{"en-US"},
 		"Authorization": []string{props.authToken},
-		"Origin": []string{"https://discord.com"},
+		"Origin": []string{discordBaseURL()},
 		"Priority": []string{"u=1, i"},
-		"Referer": []string{"https://discord.com/channels/@me"},
+		"Referer": []string{discordBaseURL() + "/channels/@me"},
 
 		"Sec-CH-UA": []string{`"Not:A-Brand";v="24", "Chromium";v="134"`},
 		"Sec-CH-UA-Mobile": []string{"?0"},
@@ -33,6 +44,7 @@ func restHeaders(props Properties) http.Header {
 		"X-Discord-Locale": []string{"en-US"},
 		"X-Discord-Timezone": []string{localTimezone()},
 		"X-Super-Properties": []string{props.superProperties()},
+
 	}
 
 }
@@ -44,6 +56,7 @@ func localTimezone() string {
 	if zone == "" {
 
 		return "America/New_York"
+
 	}
 
 	return zone
@@ -55,7 +68,8 @@ func gatewayHeaders() http.Header {
 	return http.Header{
 
 		"User-Agent": []string{userAgent},
-		"Origin": []string{"https://discord.com"},
+		"Origin": []string{discordBaseURL()},
+
 	}
 
 }

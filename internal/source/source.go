@@ -24,6 +24,7 @@ type MediaSourceStats struct {
 	BytesRead int64
 	DurationMs *int64
 	PositionMs int64
+
 }
 
 type MediaSource struct {
@@ -42,6 +43,7 @@ type MediaSource struct {
 
 	bodyMu sync.Mutex
 	body io.ReadCloser
+
 }
 
 func Create(resolve UrlResolver, headers map[string]string, initialURL string, stats *MediaSourceStats) (*MediaSource, error) {
@@ -49,6 +51,7 @@ func Create(resolve UrlResolver, headers map[string]string, initialURL string, s
 	if stats == nil {
 
 		stats = &MediaSourceStats{}
+
 	}
 
 	url := initialURL
@@ -61,6 +64,7 @@ func Create(resolve UrlResolver, headers map[string]string, initialURL string, s
 		if err != nil || url == "" {
 
 			return nil, errors.New("could not resolve a media URL")
+
 		}
 
 	}
@@ -68,6 +72,7 @@ func Create(resolve UrlResolver, headers map[string]string, initialURL string, s
 	if IsHlsURL(url) {
 
 		return nil, fmt.Errorf("HLS URLs are handled directly by libavformat")
+
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -84,6 +89,7 @@ func Create(resolve UrlResolver, headers map[string]string, initialURL string, s
 
 		url: url,
 		size: -1,
+
 	}, nil
 
 }
@@ -104,6 +110,7 @@ func (m *MediaSource) Read(p []byte) (int, error) {
 		if err := m.ctx.Err(); err != nil {
 
 			return 0, err
+
 		}
 
 		if err := m.ensureBody(); err != nil {
@@ -111,6 +118,7 @@ func (m *MediaSource) Read(p []byte) (int, error) {
 			if m.ctx.Err() != nil {
 
 				return 0, m.ctx.Err()
+
 			}
 
 			retries++
@@ -118,6 +126,7 @@ func (m *MediaSource) Read(p []byte) (int, error) {
 			if retries > config.Download.MaxRetries {
 
 				return 0, err
+
 			}
 
 			m.refreshURL()
@@ -134,6 +143,7 @@ func (m *MediaSource) Read(p []byte) (int, error) {
 			m.stats.BytesRead += int64(n)
 
 			return n, nil
+
 		}
 
 		if err == io.EOF {
@@ -147,6 +157,7 @@ func (m *MediaSource) Read(p []byte) (int, error) {
 				if retries > config.Download.MaxRetries {
 
 					return 0, io.ErrUnexpectedEOF
+
 				}
 
 				m.refreshURL()
@@ -166,6 +177,7 @@ func (m *MediaSource) Read(p []byte) (int, error) {
 			if m.ctx.Err() != nil {
 
 				return 0, m.ctx.Err()
+
 			}
 
 			retries++
@@ -173,6 +185,7 @@ func (m *MediaSource) Read(p []byte) (int, error) {
 			if retries > config.Download.MaxRetries {
 
 				return 0, err
+
 			}
 
 			m.refreshURL()
@@ -202,6 +215,7 @@ func (m *MediaSource) Seek(offset int64, whence int) (int64, error) {
 		if m.Size() < 0 {
 
 			return 0, errors.New("media size unknown")
+
 		}
 
 		target = m.size + offset
@@ -215,12 +229,14 @@ func (m *MediaSource) Seek(offset int64, whence int) (int64, error) {
 	if target < 0 {
 
 		return 0, errors.New("negative seek position")
+
 	}
 
 	if target != m.offset {
 
 		m.closeBody()
 		m.offset = target
+
 	}
 
 	return target, nil
@@ -232,6 +248,7 @@ func (m *MediaSource) Size() int64 {
 	if m.size < 0 {
 
 		_ = m.ensureBody()
+
 	}
 
 	return m.size
@@ -243,11 +260,13 @@ func (m *MediaSource) refreshURL() {
 	if m.resolve == nil {
 
 		return
+
 	}
 
 	if fresh, err := m.resolve(); err == nil && fresh != "" {
 
 		m.url = fresh
+
 	}
 
 }
@@ -279,6 +298,7 @@ func (m *MediaSource) closeBody() {
 
 		m.body.Close()
 		m.body = nil
+
 	}
 
 }
@@ -288,6 +308,7 @@ func (m *MediaSource) ensureBody() error {
 	if m.currentBody() != nil {
 
 		return nil
+
 	}
 
 	return m.open()
@@ -301,6 +322,7 @@ func (m *MediaSource) readBody(p []byte) (int, error) {
 	if body == nil {
 
 		return 0, errors.New("media connection closed")
+
 	}
 
 	watchdog := time.AfterFunc(m.timeout, func() { body.Close() })
@@ -314,6 +336,7 @@ type httpBody struct {
 
 	io.ReadCloser
 	cancel context.CancelFunc
+
 }
 
 func (b *httpBody) Close() error {
@@ -338,16 +361,19 @@ func (m *MediaSource) open() error {
 		cancelReq()
 
 		return err
+
 	}
 
 	for key, value := range m.headers {
 
 		req.Header.Set(key, value)
+
 	}
 
 	if m.offset > 0 {
 
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", m.offset))
+
 	}
 
 	response, err := http.DefaultClient.Do(req)
@@ -359,6 +385,7 @@ func (m *MediaSource) open() error {
 		cancelReq()
 
 		return err
+
 	}
 
 	if (response.StatusCode < 200 || response.StatusCode >= 300) && response.StatusCode != http.StatusPartialContent {
@@ -390,6 +417,7 @@ func (m *MediaSource) open() error {
 
 		ReadCloser: response.Body,
 		cancel: cancelReq,
+
 	})
 
 	return nil
@@ -404,11 +432,13 @@ func (m *MediaSource) noteSize(response *http.Response) {
 
 			m.size = total
 			return
+
 		}
 
 		if response.ContentLength >= 0 {
 
 			m.size = m.offset + response.ContentLength
+
 		}
 
 		return
@@ -418,6 +448,7 @@ func (m *MediaSource) noteSize(response *http.Response) {
 	if response.ContentLength >= 0 {
 
 		m.size = response.ContentLength
+
 	}
 
 }
@@ -431,6 +462,7 @@ func (m *MediaSource) discard(body io.Reader, count int64, cancelReq context.Can
 		if err := m.ctx.Err(); err != nil {
 
 			return err
+
 		}
 
 		chunk := int64(len(buffer))
@@ -438,6 +470,7 @@ func (m *MediaSource) discard(body io.Reader, count int64, cancelReq context.Can
 		if chunk > count {
 
 			chunk = count
+
 		}
 
 		watchdog := time.AfterFunc(m.timeout, cancelReq)
@@ -449,6 +482,7 @@ func (m *MediaSource) discard(body io.Reader, count int64, cancelReq context.Can
 		if err != nil {
 
 			return err
+
 		}
 
 	}
@@ -464,6 +498,7 @@ func contentRangeTotal(value string) int64 {
 	if idx < 0 {
 
 		return -1
+
 	}
 
 	total, err := strconv.ParseInt(strings.TrimSpace(value[idx+1:]), 10, 64)
@@ -471,6 +506,7 @@ func contentRangeTotal(value string) int64 {
 	if err != nil {
 
 		return -1
+
 	}
 
 	return total
