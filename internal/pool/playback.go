@@ -23,6 +23,11 @@ const (
 	pauseBodyLineWidth = 64
 	pauseBodyMaxLines = 3
 
+	// liveReconnectCTAText is shown after the first failed attempt.
+	liveReconnectCTAText = "Reconnecting live stream..."
+	// liveFallbackCTAText is shown after switching to the backup provider.
+	liveFallbackCTAText = "Trying backup source..."
+
 )
 
 type SegmentCTA struct {
@@ -182,7 +187,19 @@ func (session *Session) enrichTranscodeRequest(treq *transcode.Request, offset t
 func (session *Session) buildLoadingCard(caption string) *transcode.PauseCard {
 
 	card := session.buildPauseCard(caption)
-	card.CTA = LoadingCTAText
+
+	switch {
+
+	case session.liveAttempt >= liveProviderFallbackAfter:
+		card.CTA = fmt.Sprintf("%s (attempt %d)", liveFallbackCTAText, session.liveAttempt+1)
+
+	case session.liveAttempt > 0:
+		card.CTA = fmt.Sprintf("%s (attempt %d)", liveReconnectCTAText, session.liveAttempt+1)
+
+	default:
+		card.CTA = LoadingCTAText
+
+	}
 
 	if card.Title == "Paused" {
 

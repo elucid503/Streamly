@@ -699,6 +699,12 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 
 	}
 
+	resolveFallback := func() (tvapi.ResolvedStream, error) {
+
+		return b.Resolver.TVStreamEndpointFallback(metadata.DaddyID)
+
+	}
+
 	err = b.Pool.Play(context.Background(), session, pool.Request{
 
 		GuildID: voice.GuildID,
@@ -732,6 +738,34 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 		ResolveHeaders: func() map[string]string {
 
 			stream, err := resolveLive()
+
+			if err != nil || stream.Referer == "" {
+
+				return nil
+
+			}
+
+			return config.TVStreamHeadersForReferer(stream.Referer)
+
+		},
+
+		ResolveFallbackURL: func() (string, error) {
+
+			stream, err := resolveFallback()
+
+			if err != nil {
+
+				return "", err
+
+			}
+
+			return stream.URL, nil
+
+		},
+
+		ResolveFallbackHeaders: func() map[string]string {
+
+			stream, err := resolveFallback()
 
 			if err != nil || stream.Referer == "" {
 

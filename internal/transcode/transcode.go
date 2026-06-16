@@ -84,6 +84,7 @@ type Session struct {
 	Video <-chan Packet
 	Audio <-chan Packet
 	Done <-chan error
+	Live bool
 
 	pause *pauseState
 	card *PauseCard

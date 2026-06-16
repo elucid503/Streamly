@@ -576,6 +576,7 @@ func startNative(request Request) (*Session, error) {
 		Video: video,
 		Audio: audio,
 		Done: done,
+		Live: bool(request.Live),
 		pause: pause,
 
 	}

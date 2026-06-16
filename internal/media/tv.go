@@ -161,6 +161,12 @@ func (r *Resolver) TVStreamEndpoint(daddyID string) (tvapi.ResolvedStream, error
 
 }
 
+func (r *Resolver) TVStreamEndpointFallback(daddyID string) (tvapi.ResolvedStream, error) {
+
+	return r.tv.ResolveStreamFallback(daddyID)
+
+}
+
 func TVDetails(channel tvapi.Channel) TitleDetails {
 
 	return TitleDetails{

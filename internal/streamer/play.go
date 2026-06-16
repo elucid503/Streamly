@@ -16,6 +16,10 @@ const bufferHoldThreshold = 350 * time.Millisecond
 // pauseFrameInterval keeps clients out of buffering without exceeding the video bitrate cap.
 const pauseFrameInterval = 500 * time.Millisecond
 
+// liveLoadingTimeout is how long a live stream may stay in the loading state before the
+// segment is cancelled and the pool reconnects.
+const liveLoadingTimeout = 10 * time.Second
+
 type Playback struct {
 
 	streamer *Streamer
@@ -57,9 +61,9 @@ func OpenPlayback(ctx context.Context, s *Streamer) (*Playback, error) {
 
 }
 
-func (p *Playback) Run(ctx context.Context, ts *transcode.Session) error {
+func (p *Playback) Run(ctx context.Context, ts *transcode.Session, liveSegCancel context.CancelFunc) error {
 
-	p.sender.beginSegment()
+	p.sender.beginSegment(liveSegCancel)
 
 	return p.sender.run(ctx, ts)
 
@@ -91,9 +95,11 @@ type mediaSender struct {
 	lastRTPAt time.Time
 	gapPending bool
 
+	liveSegCancel context.CancelFunc
+
 }
 
-func (s *mediaSender) beginSegment() {
+func (s *mediaSender) beginSegment(liveSegCancel context.CancelFunc) {
 
 	s.pauseMu.Lock()
 	s.pauseEpoch = 0
@@ -101,6 +107,7 @@ func (s *mediaSender) beginSegment() {
 	s.pauseMu.Unlock()
 
 	s.lastVideoPTSMs = -1
+	s.liveSegCancel = liveSegCancel
 
 	s.clock.reset()
 
@@ -384,6 +391,28 @@ func (s *mediaSender) nextPacket(ctx context.Context, ts *transcode.Session, pac
 
 	if kind != transcode.KindVideo || s.lastVideoPTSMs < 0 {
 
+		if kind == transcode.KindVideo && ts.Live {
+
+			// Startup timeout: cancel segment if no first video frame arrives.
+			t := time.NewTimer(liveLoadingTimeout)
+			defer t.Stop()
+
+			select {
+
+			case <-ctx.Done():
+				return transcode.Packet{}, false, ctx.Err()
+			case packet, ok := <-packets:
+				return packet, ok, nil
+			case <-t.C:
+				if s.liveSegCancel != nil {
+					s.liveSegCancel()
+				}
+				return transcode.Packet{}, false, ctx.Err()
+
+			}
+
+		}
+
 		select {
 
 		case <-ctx.Done():
@@ -398,6 +427,9 @@ func (s *mediaSender) nextPacket(ctx context.Context, ts *transcode.Session, pac
 	timer := time.NewTimer(bufferHoldThreshold)
 	defer timer.Stop()
 
+	// For live streams, cancel the segment if loading persists beyond the timeout.
+	var loadingDeadline <-chan time.Time
+
 	for {
 
 		select {
@@ -407,8 +439,24 @@ func (s *mediaSender) nextPacket(ctx context.Context, ts *transcode.Session, pac
 		case packet, ok := <-packets:
 			return packet, ok, nil
 		case <-timer.C:
+
+			if ts.Live && loadingDeadline == nil {
+
+				t := time.NewTimer(liveLoadingTimeout)
+				defer t.Stop()
+				loadingDeadline = t.C
+
+			}
+
 			s.sendLoadingFrame(ctx, ts)
 			timer.Reset(pauseFrameInterval)
+
+		case <-loadingDeadline:
+
+			if s.liveSegCancel != nil {
+				s.liveSegCancel()
+			}
+			return transcode.Packet{}, false, ctx.Err()
 
 		}
 

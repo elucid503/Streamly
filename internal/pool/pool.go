@@ -48,6 +48,11 @@ type Request struct {
 	Headers map[string]string
 	ResolveHeaders func() map[string]string
 
+	// ResolveFallbackURL and ResolveFallbackHeaders are used after liveProviderFallbackAfter
+	// consecutive live reconnect failures to try an alternate stream source.
+	ResolveFallbackURL source.UrlResolver
+	ResolveFallbackHeaders func() map[string]string
+
 	Live bool
 
 	Metadata *StreamMetadata
@@ -95,6 +100,8 @@ type Session struct {
 	timedCTAs []TimedCTA
 	creditsTriggerMs int64
 	nearEndTriggered bool
+
+	liveAttempt int
 
 }
 
@@ -269,6 +276,7 @@ func (p *Pool) Acquire(guildID string) (*Session, error) {
 	session.timedCTAs = nil
 	session.creditsTriggerMs = 0
 	session.nearEndTriggered = false
+	session.liveAttempt = 0
 
 	return session, nil
 
@@ -615,6 +623,7 @@ func (p *Pool) Release(session *Session) {
 	session.timedCTAs = nil
 	session.creditsTriggerMs = 0
 	session.nearEndTriggered = false
+	session.liveAttempt = 0
 
 	session.Streamer.SetOnVoiceLeave(nil)
 	session.Streamer.LeaveVoice()
@@ -834,6 +843,11 @@ const (
 	liveReconnectDelayMax = 15 * time.Second
 	liveResolveRetries = 3
 	liveStableSegmentWindow = 30 * time.Second
+
+	// liveStartupTimeout is how long to wait for the HLS playlist to open before forcing a reconnect.
+	liveStartupTimeout = 10 * time.Second
+	// liveProviderFallbackAfter is the number of consecutive failures before trying the fallback provider.
+	liveProviderFallbackAfter = 3
 )
 
 func (p *Pool) playHLS(ctx context.Context, session *Session, playback *streamer.Playback, request Request, headers map[string]string) error {
@@ -1039,6 +1053,7 @@ func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *stre
 	url := request.InitialURL
 	attempt := 0
 	consecutiveFailures := 0
+	usingFallback := false
 
 	for {
 
@@ -1050,9 +1065,25 @@ func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *stre
 
 		if attempt > 0 {
 
-			log.Printf(`[stream] live reconnect %d for "%s"`, attempt, request.Caption)
+			// Switch to the fallback provider after enough consecutive failures.
+			if !usingFallback && consecutiveFailures >= liveProviderFallbackAfter && request.ResolveFallbackURL != nil {
 
-			url, headers = refreshLiveUpstream(ctx, request, url, headers)
+				log.Printf(`[stream] switching to fallback provider for "%s" after %d consecutive failures`, request.Caption, consecutiveFailures)
+				usingFallback = true
+
+			}
+
+			log.Printf(`[stream] live reconnect %d for "%s" (fallback=%v)`, attempt, request.Caption, usingFallback)
+
+			if usingFallback {
+
+				url, headers = refreshFallbackUpstream(ctx, request, url, headers)
+
+			} else {
+
+				url, headers = refreshLiveUpstream(ctx, request, url, headers)
+
+			}
 
 			if url == "" {
 
@@ -1087,6 +1118,8 @@ func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *stre
 		}
 
 		segmentStart := time.Now()
+
+		session.liveAttempt = attempt
 
 		if attempt == 0 {
 
@@ -1149,6 +1182,41 @@ func (p *Pool) playLiveHLS(ctx context.Context, session *Session, playback *stre
 
 }
 
+func refreshFallbackUpstream(ctx context.Context, request Request, currentURL string, currentHeaders map[string]string) (string, map[string]string) {
+
+	url := currentURL
+	headers := currentHeaders
+
+	if request.ResolveFallbackURL != nil {
+
+		fresh, err := request.ResolveFallbackURL()
+
+		if err == nil && fresh != "" {
+
+			url = fresh
+
+		} else if err != nil {
+
+			log.Printf(`[stream] fallback URL resolve failed: %v`, err)
+
+		}
+
+	}
+
+	if request.ResolveFallbackHeaders != nil {
+
+		if fresh := request.ResolveFallbackHeaders(); len(fresh) > 0 {
+
+			headers = fresh
+
+		}
+
+	}
+
+	return url, headers
+
+}
+
 func (p *Pool) runSegment(ctx context.Context, session *Session, playback *streamer.Playback, treq transcode.Request, offset time.Duration, cleanup func()) (error, error) {
 
 	segCtx, segCancel := context.WithCancel(ctx)
@@ -1163,9 +1231,30 @@ func (p *Pool) runSegment(ctx context.Context, session *Session, playback *strea
 
 	}
 
+	// For live streams, set up a startup watchdog that fires if the HLS playlist
+	// open stalls (SupplyCTAs not called) within liveStartupTimeout.
+	var streamOpened chan struct{}
+
+	if treq.Live {
+
+		streamOpened = make(chan struct{}, 1)
+
+	}
+
 	treq.Start = offset
 	treq.Context = segCtx
 	treq.SupplyCTAs = func(probedDurationMs int64, startMs int64) (string, []transcode.CTAWindow) {
+
+		if streamOpened != nil {
+
+			select {
+
+			case streamOpened <- struct{}{}:
+			default:
+
+			}
+
+		}
 
 		if probedDurationMs > 0 {
 
@@ -1216,6 +1305,24 @@ func (p *Pool) runSegment(ctx context.Context, session *Session, playback *strea
 
 	}
 
+	if treq.Live {
+
+		go func() {
+
+			select {
+
+			case <-streamOpened:
+			case <-time.After(liveStartupTimeout):
+				log.Printf(`[stream] live stream open timeout for "%s", forcing reconnect`, treq.Caption)
+				segCancel()
+			case <-segCtx.Done():
+
+			}
+
+		}()
+
+	}
+
 	session.transcodePause = ts.Pause
 	session.transcodeResume = ts.Resume
 	session.startedAt = time.Now().Add(-offset)
@@ -1227,7 +1334,7 @@ func (p *Pool) runSegment(ctx context.Context, session *Session, playback *strea
 
 	}
 
-	playErr := playback.Run(segCtx, ts)
+	playErr := playback.Run(segCtx, ts, segCancel)
 
 	// Unblock in-flight reads for teardown; don't cancel segCtx yet or ts.Done gets ctx.Canceled.
 	if cleanup != nil {
