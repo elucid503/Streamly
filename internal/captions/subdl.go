@@ -204,6 +204,67 @@ func (c *SubDLClient) SearchPath(ctx context.Context, query Query) (string, erro
 
 func (c *SubDLClient) resolvePaths(ctx context.Context, query Query) ([]string, error) {
 
+	var paths []string
+	var firstErr error
+	seen := make(map[string]struct{})
+
+	for _, candidate := range subdlQueryVariants(query) {
+
+		response, err := c.search(ctx, candidate)
+
+		if err != nil {
+
+			if firstErr == nil {
+
+				firstErr = err
+
+			}
+
+			continue
+
+		}
+
+		for _, path := range pickSubDLPaths(response, candidate.Season, candidate.Episode) {
+
+			key := strings.TrimSpace(path)
+
+			if key == "" {
+
+				continue
+
+			}
+
+			if _, ok := seen[key]; ok {
+
+				continue
+
+			}
+
+			seen[key] = struct{}{}
+			paths = append(paths, path)
+
+		}
+
+	}
+
+	if len(paths) > 0 {
+
+		return paths, nil
+
+	}
+
+	if firstErr != nil {
+
+		return nil, firstErr
+
+	}
+
+	return nil, ErrNoSubtitle
+
+}
+
+func (c *SubDLClient) search(ctx context.Context, query Query) (subdlSearchResponse, error) {
+
 	params := url.Values{}
 
 	params.Set("api_key", c.apiKey)
@@ -232,7 +293,7 @@ func (c *SubDLClient) resolvePaths(ctx context.Context, query Query) ([]string, 
 
 	} else {
 
-		return nil, ErrNoSubtitle
+		return subdlSearchResponse{}, ErrNoSubtitle
 
 	}
 
@@ -248,13 +309,13 @@ func (c *SubDLClient) resolvePaths(ctx context.Context, query Query) ([]string, 
 
 	if err != nil {
 
-		return nil, err
+		return subdlSearchResponse{}, err
 
 	}
 
 	if resp.IsErrorState() {
 
-		return nil, mapSubDLError(resp.StatusCode, resp.String())
+		return subdlSearchResponse{}, mapSubDLError(resp.StatusCode, resp.String())
 
 	}
 
@@ -262,21 +323,69 @@ func (c *SubDLClient) resolvePaths(ctx context.Context, query Query) ([]string, 
 
 		if strings.TrimSpace(response.Error) != "" {
 
-			return nil, fmt.Errorf("captions: subdl: %s", strings.TrimSpace(response.Error))
+			return subdlSearchResponse{}, fmt.Errorf("captions: subdl: %s", strings.TrimSpace(response.Error))
 
 		}
 
-		return nil, ErrNoSubtitle
+		return subdlSearchResponse{}, ErrNoSubtitle
 
 	}
 
-	if paths := pickSubDLPaths(response, query.Season, query.Episode); len(paths) > 0 {
+	return response, nil
 
-		return paths, nil
+}
+
+func subdlQueryVariants(query Query) []Query {
+
+	var variants []Query
+	seen := make(map[string]struct{})
+
+	add := func(candidate Query) {
+
+		if strings.TrimSpace(candidate.IMDBId) == "" && candidate.TMDBId <= 0 {
+
+			return
+
+		}
+
+		key := strings.Join([]string{
+			strings.TrimSpace(candidate.IMDBId),
+			strconv.Itoa(candidate.TMDBId),
+			strings.TrimSpace(candidate.VideoName),
+			strconv.Itoa(candidate.Season),
+			strconv.Itoa(candidate.Episode),
+		}, "\x00")
+
+		if _, ok := seen[key]; ok {
+
+			return
+
+		}
+
+		seen[key] = struct{}{}
+		variants = append(variants, candidate)
 
 	}
 
-	return nil, ErrNoSubtitle
+	add(query)
+
+	withoutName := query
+	withoutName.VideoName = ""
+	add(withoutName)
+
+	if strings.TrimSpace(query.IMDBId) != "" && query.TMDBId > 0 {
+
+		tmdbQuery := query
+		tmdbQuery.IMDBId = ""
+		add(tmdbQuery)
+
+		tmdbWithoutName := tmdbQuery
+		tmdbWithoutName.VideoName = ""
+		add(tmdbWithoutName)
+
+	}
+
+	return variants
 
 }
 
@@ -609,6 +718,32 @@ func parseLeadingEpisode(label string) int {
 }
 
 func (c *SubDLClient) downloadBytes(ctx context.Context, path string) ([]byte, error) {
+
+	path = strings.TrimSpace(path)
+
+	data, err := c.downloadURLBytes(ctx, path)
+
+	if err == nil {
+
+		return data, nil
+
+	}
+
+	if withoutQuery, _, ok := strings.Cut(path, "?"); ok && strings.TrimSpace(withoutQuery) != "" {
+
+		if fallback, fallbackErr := c.downloadURLBytes(ctx, withoutQuery); fallbackErr == nil {
+
+			return fallback, nil
+
+		}
+
+	}
+
+	return nil, err
+
+}
+
+func (c *SubDLClient) downloadURLBytes(ctx context.Context, path string) ([]byte, error) {
 
 	if !strings.HasPrefix(path, "/") {
 

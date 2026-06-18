@@ -58,6 +58,7 @@ type Channel struct {
 	Slug string `json:"slug"`
 
 	Logo string `json:"logo"`
+	Image string `json:"image"`
 
 	Country  Country `json:"country"`
 	Category string  `json:"category"`

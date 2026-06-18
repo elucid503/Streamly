@@ -314,7 +314,52 @@ func parseCatalogJSON(body []byte) (*ChannelCatalog, error) {
 
 	}
 
+	if isCDNLiveTVCatalog(&catalog) {
+
+		return nil, fmt.Errorf("decode channels: rejected cdnlivetv catalog (ids misaligned with daddylive)")
+
+	}
+
+	for index := range catalog.Channels {
+
+		channel := &catalog.Channels[index]
+
+		if channel.Logo == "" && channel.Image != "" {
+
+			channel.Logo = channel.Image
+
+		}
+
+	}
+
 	return &catalog, nil
+
+}
+
+// dami-tv.pro began serving a cdnlivetv schema whose daddyId is its own sequential index
+// (ABC=1), not daddylive's — so every channel mismaps (daddy id 1 = premium1 = RSI LA2) and
+// the logo field is renamed image. Reject it so the daddylive-aligned embedded catalog is kept.
+func isCDNLiveTVCatalog(catalog *ChannelCatalog) bool {
+
+	if strings.EqualFold(strings.TrimSpace(catalog.Source), "cdnlivetv") {
+
+		return true
+
+	}
+
+	cdnlivetv := 0
+
+	for _, channel := range catalog.Channels {
+
+		if strings.EqualFold(strings.TrimSpace(channel.Source), "cdnlivetv") {
+
+			cdnlivetv++
+
+		}
+
+	}
+
+	return cdnlivetv*2 > len(catalog.Channels)
 
 }
 
