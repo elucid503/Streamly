@@ -45,6 +45,7 @@ func isHLSPlaylistURL(raw string) bool {
 
 	}
 
-	return strings.Contains(path, "/papi/tv/playlist/")
+	return strings.Contains(path, "/papi/tv/playlist/") ||
+		strings.Contains(path, "/api/proxy/playlist")
 
 }

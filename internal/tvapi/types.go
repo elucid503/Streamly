@@ -1,6 +1,7 @@
 package tvapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -57,7 +58,7 @@ type Channel struct {
 	Name string `json:"name"`
 	Slug string `json:"slug"`
 
-	Logo string `json:"logo"`
+	Logo  string `json:"logo"`
 	Image string `json:"image"`
 
 	Country  Country `json:"country"`
@@ -66,6 +67,87 @@ type Channel struct {
 	Status string `json:"status"`
 
 	Source string `json:"source"`
+}
+
+func (channel *Channel) UnmarshalJSON(data []byte) error {
+
+	var object struct {
+		ID      flexibleString `json:"id"`
+		DaddyID flexibleString `json:"daddyId"`
+
+		Name flexibleString `json:"name"`
+		Slug flexibleString `json:"slug"`
+
+		Logo  flexibleString `json:"logo"`
+		Image flexibleString `json:"image"`
+
+		Country  Country        `json:"country"`
+		Category flexibleString `json:"category"`
+
+		Status flexibleString `json:"status"`
+
+		Source flexibleString `json:"source"`
+	}
+
+	if err := json.Unmarshal(data, &object); err != nil {
+
+		return err
+
+	}
+
+	channel.ID = string(object.ID)
+	channel.DaddyID = string(object.DaddyID)
+
+	channel.Name = string(object.Name)
+	channel.Slug = string(object.Slug)
+
+	channel.Logo = string(object.Logo)
+	channel.Image = string(object.Image)
+
+	channel.Country = object.Country
+	channel.Category = string(object.Category)
+
+	channel.Status = string(object.Status)
+
+	channel.Source = string(object.Source)
+
+	return nil
+
+}
+
+type flexibleString string
+
+func (value *flexibleString) UnmarshalJSON(data []byte) error {
+
+	data = bytes.TrimSpace(data)
+
+	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
+
+		*value = ""
+		return nil
+
+	}
+
+	var text string
+
+	if err := json.Unmarshal(data, &text); err == nil {
+
+		*value = flexibleString(strings.TrimSpace(text))
+		return nil
+
+	}
+
+	var number json.Number
+
+	if err := json.Unmarshal(data, &number); err == nil {
+
+		*value = flexibleString(number.String())
+		return nil
+
+	}
+
+	return fmt.Errorf("decode string: unsupported value %s", string(data))
+
 }
 
 type ChannelCatalog struct {
