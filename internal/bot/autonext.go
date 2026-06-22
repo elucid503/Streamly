@@ -301,7 +301,7 @@ func (b *Bot) waitForStreamSlot(ctx context.Context, guildID string) bool {
 
 		}
 
-		if err := b.Pool.RequireAvailable(guildID); err == nil {
+		if err := b.Pool.RequireWorker(guildID); err == nil {
 
 			return true
 
@@ -327,7 +327,7 @@ func (b *Bot) executeAutoNextPlay(s *discordgo.Session, state *autoNextState) {
 
 	}
 
-	if err := b.Pool.RequireAvailable(state.guildID); err != nil {
+	if err := b.Pool.RequireWorker(state.guildID); err != nil {
 
 		b.failAutoNext(s, state, "Auto-Next Cancelled", "Another stream is already active.")
 		return
@@ -417,21 +417,11 @@ func (b *Bot) handleAutoNextButton(s *discordgo.Session, i *discordgo.Interactio
 
 		}
 
-		if active := b.Pool.ActiveInGuild(guildID); active != nil {
-
-			b.Pool.Stop(active)
-
-		}
-
 		prompt := autoNextPromptCopy(state)
 		b.ackAutoNextInteraction(s, i)
 		b.deleteAutoNextMessage(s, prompt)
 
-		go func(st *autoNextState) {
-
-			time.Sleep(autoNextStopSettle)
-			b.tryExecuteAutoNext(s, st)
-		}(state)
+		go b.tryExecuteAutoNext(s, state)
 
 	case "stop":
 		if state.cancel != nil {
@@ -545,15 +535,6 @@ func (b *Bot) startEpisodeFromAutoNext(s *discordgo.Session, state *autoNextStat
 
 	}
 
-	session, err := b.Pool.Acquire(state.guildID)
-
-	if err != nil {
-
-		b.failAutoNext(s, state, "Auto-Next Failed", workerErrorMessage(err))
-		return false
-
-	}
-
 	qualities, _ := b.Resolver.Qualities(metadata.ShareKey, metadata.FID)
 	target := metadata.Target
 
@@ -591,7 +572,6 @@ func (b *Bot) startEpisodeFromAutoNext(s *discordgo.Session, state *autoNextStat
 
 		if err != nil || resolved == "" {
 
-			b.Pool.Release(session)
 			b.failAutoNext(s, state, "Auto-Next Failed", "No playable source was available for the next episode.")
 			return false
 
@@ -601,11 +581,20 @@ func (b *Bot) startEpisodeFromAutoNext(s *discordgo.Session, state *autoNextStat
 
 	}
 
+	session, play, err := b.acquireForPlayback(state.guildID)
+
+	if err != nil {
+
+		b.failAutoNext(s, state, "Auto-Next Failed", workerErrorMessage(err))
+		return false
+
+	}
+
 	meta := metadata
 	caption := overlayCaption(meta.Details.Title, episode)
 	embed := streamingEmbed(meta.Details, channel.ID, episode)
 
-	err = b.Pool.Play(context.Background(), session, pool.Request{
+	err = play(context.Background(), session, pool.Request{
 
 		GuildID: channel.GuildID,
 		ChannelID: channel.ID,

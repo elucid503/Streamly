@@ -10,12 +10,7 @@ import (
 	"time"
 )
 
-const (
-	channelsPath = "/data/tv-channels.json?v=302"
-	legacyResolvePath = "/papi/tv/resolve/"
-
-	catalogTTL = 15 * time.Minute
-)
+const catalogTTL = 15 * time.Minute
 
 type TVOptions struct {
 
@@ -33,6 +28,11 @@ type TVClient struct {
 	catalogAt time.Time
 
 	refreshOnce sync.Once
+
+	sportsMu sync.RWMutex
+	sports []SportsEvent
+	sportsAt time.Time
+	sportsRefreshing bool
 
 }
 

@@ -3,28 +3,27 @@ package tvapi
 import (
 	_ "embed"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 //go:embed data/tv-channels.json
 var embeddedCatalogJSON []byte
 
-const catalogRefreshTimeout = 45 * time.Second
+const (
+	dlhdDefaultBaseURL    = "https://dlhd.pk"
+	catalogRefreshTimeout = 45 * time.Second
+)
 
-type catalogProvider struct {
-
-	name string
-
-	url string
-
-}
+var channelCardPattern = regexp.MustCompile(`href="/watch\.php\?id=(\d+)"\s+data-title="([^"]+)"`)
 
 func seedEmbeddedCatalog(c *TVClient) {
 
@@ -98,35 +97,7 @@ func (c *TVClient) fetchCatalog(timeout time.Duration) (*ChannelCatalog, error) 
 
 	client := &http.Client{Timeout: timeout}
 
-	var errs []error
-
-	for _, provider := range c.catalogProviders() {
-
-		catalog, err := c.fetchFromProvider(client, provider)
-
-		if err == nil {
-
-			c.storeCatalog(catalog)
-
-			log.Printf("[tvapi] catalog refreshed from %s (%d channels)", provider.name, len(catalog.Channels))
-
-			return catalog, nil
-
-		}
-
-		log.Printf("[tvapi] catalog provider %s failed: %v", provider.name, err)
-
-		errs = append(errs, fmt.Errorf("%s: %w", provider.name, err))
-
-	}
-
-	return nil, errors.Join(errs...)
-
-}
-
-func (c *TVClient) fetchFromProvider(client *http.Client, provider catalogProvider) (*ChannelCatalog, error) {
-
-	request, err := http.NewRequest(http.MethodGet, provider.url, nil)
+	catalog, err := scrapeDLHDChannels(client)
 
 	if err != nil {
 
@@ -134,19 +105,43 @@ func (c *TVClient) fetchFromProvider(client *http.Client, provider catalogProvid
 
 	}
 
-	referer := providerReferer(provider.url)
+	c.storeCatalog(catalog)
+
+	log.Printf("[tv] catalog refreshed from dlhd.pk (%d channels)", len(catalog.Channels))
+
+	return catalog, nil
+
+}
+
+func scrapeDLHDChannels(client *http.Client) (*ChannelCatalog, error) {
+
+	base := strings.TrimRight(strings.TrimSpace(os.Getenv("TV_DLHD_BASE_URL")), "/")
+
+	if base == "" {
+
+		base = dlhdDefaultBaseURL
+
+	}
+
+	pageURL := base + "/24-7-channels.php"
+
+	request, err := http.NewRequest(http.MethodGet, pageURL, nil)
+
+	if err != nil {
+
+		return nil, fmt.Errorf("dlhd scrape: build request: %w", err)
+
+	}
 
 	request.Header.Set("User-Agent", tvBrowserUA)
 	request.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	request.Header.Set("Referer", referer)
-
-	request.Header.Set("Accept-Encoding", "identity")
+	request.Header.Set("Referer", base+"/")
 
 	response, err := client.Do(request)
 
 	if err != nil {
 
-		return nil, err
+		return nil, fmt.Errorf("dlhd scrape: fetch: %w", err)
 
 	}
 
@@ -154,218 +149,180 @@ func (c *TVClient) fetchFromProvider(client *http.Client, provider catalogProvid
 
 	if response.StatusCode != http.StatusOK {
 
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 512))
-
-		return nil, fmt.Errorf("status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("dlhd scrape: status %d", response.StatusCode)
 
 	}
 
-	body, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
+	body, err := io.ReadAll(io.LimitReader(response.Body, 8<<20))
 
 	if err != nil {
 
-		return nil, err
+		return nil, fmt.Errorf("dlhd scrape: read: %w", err)
 
 	}
 
-	return parseCatalogJSON(body)
+	matches := channelCardPattern.FindAllSubmatch(body, -1)
 
-}
+	seen := make(map[string]struct{}, len(matches))
+	channels := make([]Channel, 0, len(matches))
 
-func (c *TVClient) catalogProviders() []catalogProvider {
+	for _, m := range matches {
 
-	seen := make(map[string]struct{})
+		daddyID := string(m[1])
 
-	providers := make([]catalogProvider, 0, 4)
+		if _, dup := seen[daddyID]; dup {
 
-	add := func(name, rawURL string) {
-
-		rawURL = strings.TrimSpace(rawURL)
-
-		if rawURL == "" {
-
-			return
+			continue
 
 		}
 
-		url := normalizeCatalogURL(rawURL)
+		seen[daddyID] = struct{}{}
 
-		if _, ok := seen[url]; ok {
+		name := html.UnescapeString(string(m[2]))
+		slug := makeChannelSlug(name)
 
-			return
+		channels = append(channels, Channel{
 
-		}
-
-		seen[url] = struct{}{}
-
-		if name == "" {
-
-			name = url
-
-		}
-
-		providers = append(providers, catalogProvider{
-
-			name: name,
-
-			url: url,
+			ID:      "dl-" + daddyID,
+			DaddyID: daddyID,
+			Name:    titleCase(name),
+			Slug:    slug,
+			Logo:    base + "/logos/" + makeLogoSlug(name) + ".png",
+			Source:  "tv247",
 
 		})
 
 	}
 
-	for index, rawURL := range catalogURLCandidates() {
+	if len(channels) == 0 {
 
-		add(fmt.Sprintf("catalog-%d", index+1), rawURL)
+		return nil, fmt.Errorf("dlhd scrape: no channels found in page")
 
 	}
 
-	return providers
+	return &ChannelCatalog{
+
+		Source:   "tv247",
+		Total:    len(channels),
+		Channels: channels,
+
+	}, nil
 
 }
 
-func catalogURLCandidates() []string {
+func makeChannelSlug(name string) string {
 
-	if urls := strings.TrimSpace(os.Getenv("TV_CATALOG_URLS")); urls != "" {
+	name = strings.ToLower(name)
 
-		parts := strings.Split(urls, ",")
-		candidates := make([]string, 0, len(parts))
+	var b strings.Builder
 
-		for _, part := range parts {
+	prev := '-'
 
-			if trimmed := strings.TrimSpace(part); trimmed != "" {
+	for _, r := range name {
 
-				candidates = append(candidates, trimmed)
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
 
-			}
+			b.WriteRune(r)
+			prev = r
 
-		}
+		} else if prev != '-' {
 
-		if len(candidates) > 0 {
-
-			return candidates // explicitly provided URLs take precedence
-
-		}
-
-	}
-
-	if base := strings.TrimSpace(os.Getenv("TV_BASE_URL")); base != "" {
-
-		return []string{base} // a base URL can be used as a fallback
-	}
-
-	return []string{""} // nothing provided, will rely on embedded catalog
-
-}
-
-func normalizeCatalogURL(rawURL string) string {
-
-	rawURL = strings.TrimSpace(rawURL)
-
-	if strings.Contains(rawURL, "tv-channels.json") {
-
-		return rawURL
-
-	}
-
-	return strings.TrimRight(rawURL, "/") + channelsPath
-
-}
-
-func providerReferer(rawURL string) string {
-
-	if strings.Contains(rawURL, "://") {
-
-		parts := strings.SplitN(strings.TrimPrefix(rawURL, "https://"), "/", 2)
-
-		if len(parts) > 0 && parts[0] != "" {
-
-			return "https://" + parts[0] + "/"
+			b.WriteByte('-')
+			prev = '-'
 
 		}
 
 	}
 
-	base := os.Getenv("TV_BASE_URL")
-
-	if base != "" {
-
-		return normalizeCatalogURL(base)
-
-	}
-
-	return base + "/"
+	return strings.Trim(b.String(), "-")
 
 }
 
-func parseCatalogJSON(body []byte) (*ChannelCatalog, error) {
+func makeLogoSlug(name string) string {
+
+	name = strings.ToLower(name)
+
+	var b strings.Builder
+
+	prev := '_'
+
+	for _, r := range name {
+
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+
+			b.WriteRune(r)
+			prev = r
+
+		} else if prev != '_' {
+
+			b.WriteByte('_')
+			prev = '_'
+
+		}
+
+	}
+
+	return strings.Trim(b.String(), "_")
+
+}
+
+func titleCase(s string) string {
+
+	words := strings.Fields(s)
+
+	for i, w := range words {
+
+		if w == "" {
+
+			continue
+
+		}
+
+		// Short tokens are typically country codes or abbreviations (USA, CNN, HD).
+		if n := utf8.RuneCountInString(w); n == 2 || n == 3 {
+
+			words[i] = strings.ToUpper(w)
+			continue
+
+		}
+
+		words[i] = strings.ToUpper(w[:1]) + w[1:]
+
+	}
+
+	return strings.Join(words, " ")
+
+}
+
+func embeddedCatalog() (*ChannelCatalog, error) {
 
 	var catalog ChannelCatalog
 
-	if err := json.Unmarshal(body, &catalog); err != nil {
+	if err := json.Unmarshal(embeddedCatalogJSON, &catalog); err != nil {
 
-		return nil, fmt.Errorf("decode channels: %w", err)
+		return nil, err
 
 	}
 
 	if len(catalog.Channels) == 0 {
 
-		return nil, fmt.Errorf("decode channels: empty catalog")
-
-	}
-
-	if isCDNLiveTVCatalog(&catalog) {
-
-		return nil, fmt.Errorf("decode channels: rejected cdnlivetv catalog (ids misaligned with daddylive)")
+		return nil, fmt.Errorf("embedded catalog is empty")
 
 	}
 
 	for index := range catalog.Channels {
 
-		channel := &catalog.Channels[index]
+		ch := &catalog.Channels[index]
 
-		if channel.Logo == "" && channel.Image != "" {
+		if ch.Logo == "" && ch.Image != "" {
 
-			channel.Logo = channel.Image
+			ch.Logo = ch.Image
 
 		}
 
 	}
 
 	return &catalog, nil
-
-}
-
-// dami-tv.pro began serving a cdnlivetv schema whose daddyId is its own sequential index
-// (ABC=1), not daddylive's — so every channel mismaps (daddy id 1 = premium1 = RSI LA2) and
-// the logo field is renamed image. Reject it so the daddylive-aligned embedded catalog is kept.
-func isCDNLiveTVCatalog(catalog *ChannelCatalog) bool {
-
-	if strings.EqualFold(strings.TrimSpace(catalog.Source), "cdnlivetv") {
-
-		return true
-
-	}
-
-	cdnlivetv := 0
-
-	for _, channel := range catalog.Channels {
-
-		if strings.EqualFold(strings.TrimSpace(channel.Source), "cdnlivetv") {
-
-			cdnlivetv++
-
-		}
-
-	}
-
-	return cdnlivetv*2 > len(catalog.Channels)
-
-}
-
-func embeddedCatalog() (*ChannelCatalog, error) {
-
-	return parseCatalogJSON(embeddedCatalogJSON)
 
 }
 

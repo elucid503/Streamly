@@ -66,6 +66,8 @@ func NewResolver() *Resolver {
 func (r *Resolver) Warmup() {
 
 	r.tv.Warmup()
+	r.tv.WarmupSports()
+	r.tvmaze.Warmup()
 }
 
 func (r *Resolver) Search(query string) ([]febapi.SearchResult, error) {

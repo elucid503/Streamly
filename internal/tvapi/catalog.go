@@ -162,21 +162,32 @@ func (catalog *ChannelCatalog) PopularUS(limit int) []Channel {
 
 	us := catalog.Filter("us", "")
 
-	sort.Slice(us, func(i, j int) bool {
+	// Scraped catalogs carry no country metadata, so the country filter comes back
+	// empty; fall back to the global popularity ranking, which still surfaces the
+	// popular US channels first via their slugs.
+	if len(us) == 0 {
 
-		left := popularityRank(us[i].Slug)
+		us = catalog.Sorted()
 
-		right := popularityRank(us[j].Slug)
+	} else {
 
-		if left != right {
+		sort.Slice(us, func(i, j int) bool {
 
-			return left < right
+			left := popularityRank(us[i].Slug)
 
-		}
+			right := popularityRank(us[j].Slug)
 
-		return strings.Compare(us[i].Name, us[j].Name) < 0
+			if left != right {
 
-	})
+				return left < right
+
+			}
+
+			return strings.Compare(us[i].Name, us[j].Name) < 0
+
+		})
+
+	}
 
 	if len(us) > limit {
 

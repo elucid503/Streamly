@@ -31,7 +31,10 @@ const (
 	CloseEnded CloseReason = "ended"
 	CloseStopped CloseReason = "stopped"
 	CloseError CloseReason = "error"
+	CloseSwapped CloseReason = "swapped"
 )
+
+const hotswapTeardownTimeout = 20 * time.Second
 
 type QualityResolver func(attempt int) (string, error)
 
@@ -102,6 +105,9 @@ type Session struct {
 	nearEndTriggered bool
 
 	liveAttempt int
+
+	swapping bool
+	loopDone chan struct{}
 
 }
 
@@ -234,6 +240,23 @@ func (p *Pool) RequireAvailable(guildID string) error {
 	if session.Busy {
 
 		return ErrWorkerBusy
+
+	}
+
+	return nil
+
+}
+
+// RequireWorker verifies a worker exists for the guild without rejecting an
+// already-active stream; the active stream can be hot-swapped in place.
+func (p *Pool) RequireWorker(guildID string) error {
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if _, ok := p.sessions[guildID]; !ok {
+
+		return ErrNoWorker
 
 	}
 
@@ -454,6 +477,134 @@ func (p *Pool) Play(ctx context.Context, session *Session, request Request) erro
 
 	}
 
+	session.loopDone = make(chan struct{})
+
+	go p.runLoop(session, request)
+
+	return nil
+
+}
+
+// Swap tears down the active stream in the guild without leaving voice, leaving
+// the session re-armed (and still Busy) so PlayReusing can start a new stream
+// while the worker stays in the call. It returns the re-armed session.
+func (p *Pool) Swap(guildID string) (*Session, error) {
+
+	p.mu.Lock()
+
+	session, ok := p.sessions[guildID]
+
+	if !ok {
+
+		p.mu.Unlock()
+		return nil, ErrNoWorker
+
+	}
+
+	if !session.Busy {
+
+		p.mu.Unlock()
+		return p.Acquire(guildID)
+
+	}
+
+	session.swapping = true
+	done := session.loopDone
+
+	p.mu.Unlock()
+
+	if session.controller != nil {
+
+		session.controller()
+
+	}
+
+	if done != nil {
+
+		select {
+
+		case <-done:
+
+		case <-time.After(hotswapTeardownTimeout):
+
+		}
+
+	}
+
+	p.rearmForSwap(session)
+
+	return session, nil
+
+}
+
+func (p *Pool) rearmForSwap(session *Session) {
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	session.Busy = true
+	session.Paused = false
+	session.StopRequested = false
+	session.swapping = false
+	session.stats = &source.MediaSourceStats{}
+
+	session.Captions = &captions.Track{}
+	session.FontsDir = ""
+	session.CaptionSource = ""
+	session.CaptionQueryKey = ""
+
+	session.Metadata = nil
+	session.ctaFontPath = ""
+	session.pendingSegmentCTAs = nil
+	session.timedCTAs = nil
+	session.creditsTriggerMs = 0
+	session.nearEndTriggered = false
+	session.liveAttempt = 0
+
+}
+
+// PlayReusing starts a new stream on a session that is already connected to
+// voice (after Swap), avoiding a voice re-join so the worker never leaves the call.
+func (p *Pool) PlayReusing(ctx context.Context, session *Session, request Request) error {
+
+	if session.Streamer.VoiceConnection() == nil {
+
+		return p.Play(ctx, session, request)
+
+	}
+
+	session.StopRequested = false
+	session.request = &request
+	session.startedAt = time.Now()
+	session.pausedAt = time.Time{}
+	session.stats = &source.MediaSourceStats{}
+
+	session.Streamer.SetOnVoiceLeave(func() {
+
+		if !session.Busy {
+
+			return
+
+		}
+
+		if session.controller != nil {
+
+			session.controller()
+
+		}
+
+	})
+
+	session.Metadata = request.Metadata
+
+	if request.OnPrepare != nil {
+
+		request.OnPrepare(session)
+
+	}
+
+	session.loopDone = make(chan struct{})
+
 	go p.runLoop(session, request)
 
 	return nil
@@ -652,6 +803,8 @@ func (p *Pool) Release(session *Session) {
 
 func (p *Pool) runLoop(session *Session, request Request) {
 
+	done := session.loopDone
+
 	reason := CloseEnded
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -678,6 +831,32 @@ func (p *Pool) runLoop(session *Session, request Request) {
 
 	cancel()
 
+	p.mu.Lock()
+	swapping := session.swapping
+	p.mu.Unlock()
+
+	if swapping {
+
+		p.teardownForSwap(session)
+
+		// Notify before unblocking Swap so the swapped-in stream's message edit
+		// deterministically lands after this one (they may share a message).
+		if request.OnClose != nil {
+
+			request.OnClose(CloseSwapped)
+
+		}
+
+		if done != nil {
+
+			close(done)
+
+		}
+
+		return
+
+	}
+
 	if reason == CloseEnded && request.OnNearEnd != nil && !session.nearEndTriggered {
 
 		request.OnNearEnd()
@@ -686,11 +865,37 @@ func (p *Pool) runLoop(session *Session, request Request) {
 
 	p.Release(session)
 
+	if done != nil {
+
+		close(done)
+
+	}
+
 	if request.OnClose != nil {
 
 		request.OnClose(reason)
 
 	}
+
+}
+
+// teardownForSwap releases the playback pipeline but keeps the voice connection
+// alive so a swapped-in stream resumes without the worker leaving the call.
+func (p *Pool) teardownForSwap(session *Session) {
+
+	session.controller = nil
+
+	if session.media != nil {
+
+		session.media.Destroy()
+		session.media = nil
+
+	}
+
+	session.seekMu.Lock()
+	session.pendingSeek = nil
+	session.segmentCancel = nil
+	session.seekMu.Unlock()
 
 }
 

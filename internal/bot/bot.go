@@ -116,6 +116,12 @@ func (b *Bot) registerCommands() error {
 		{Name: "stop", Description: "Stop the active stream in your call."},
 		{Name: "stats", Description: "Show stats for the active stream in your call."},
 		{Name: "channels", Description: "Browse live TV channels and pick one to watch."},
+
+		{Name: "sports", Description: "Find a live sports game and stream it in your call.", Options: []*discordgo.ApplicationCommandOption{
+
+			{Type: discordgo.ApplicationCommandOptionString, Name: "game", Description: "Search live games by league or matchup.", Required: true, Autocomplete: true},
+
+		}},
 		{Name: "top", Description: "See trending movies and TV shows to watch."},
 		{Name: "now", Description: "See what is streaming in this server."},
 
@@ -208,6 +214,10 @@ func (b *Bot) onCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	case "channels":
 
 		b.handleChannels(s, i)
+
+	case "sports":
+
+		b.handleSports(s, i)
 
 	case "top":
 

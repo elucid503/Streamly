@@ -41,29 +41,28 @@ const autocompleteDeadline = 2500 * time.Millisecond
 
 func (b *Bot) onAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
-	if i.ApplicationCommandData().Name == "seek" {
+	switch i.ApplicationCommandData().Name {
+
+	case "seek":
 
 		b.onSeekAutocomplete(s, i)
 		return
 
-	}
+	case "sports":
 
-	query := ""
-
-	for _, option := range i.ApplicationCommandData().Options {
-
-		if option.Name == "title" {
-
-			query = strings.TrimSpace(option.StringValue())
-
-		}
+		respondAutocomplete(s, i, b.sportsGameChoices(strings.TrimSpace(optionString(i, "game"))))
+		return
 
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), autocompleteDeadline)
 	defer cancel()
 
-	choices := b.streamTitleChoices(ctx, i, query)
+	respondAutocomplete(s, i, b.streamTitleChoices(ctx, i, strings.TrimSpace(optionString(i, "title"))))
+
+}
+
+func respondAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate, choices []*discordgo.ApplicationCommandOptionChoice) {
 
 	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 
@@ -173,7 +172,7 @@ func (b *Bot) streamTitleChoices(ctx context.Context, i *discordgo.InteractionCr
 
 			choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
 
-				Name: truncate(media.TVAutocompleteLabel(channel), 100),
+				Name: truncate(b.Resolver.TVAutocompleteLabelWithShow(channel), 100),
 				Value: media.TVSelectionValue(channel.DaddyID),
 
 			})
@@ -207,7 +206,7 @@ func (b *Bot) handleStream(s *discordgo.Session, i *discordgo.InteractionCreate)
 
 	_ = deferReply(s, i)
 
-	if err := b.Pool.RequireAvailable(i.GuildID); err != nil {
+	if err := b.Pool.RequireWorker(i.GuildID); err != nil {
 
 		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr(err.Error())})
 		return
@@ -225,7 +224,7 @@ func (b *Bot) handleStream(s *discordgo.Session, i *discordgo.InteractionCreate)
 
 		}
 
-		b.startLiveStream(s, i, *live, live.Name, media.TVSelectionValue(live.DaddyID))
+		b.startLiveStream(s, i, *live, live.Name, media.TVSelectionValue(live.DaddyID), true)
 		return
 
 	}
@@ -401,7 +400,7 @@ func (b *Bot) handleSelect(s *discordgo.Session, i *discordgo.InteractionCreate,
 
 			}
 
-			if err := b.Pool.RequireAvailable(i.GuildID); err != nil {
+			if err := b.Pool.RequireWorker(i.GuildID); err != nil {
 
 				editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr(err.Error())})
 				return
@@ -464,6 +463,27 @@ type episodeRef struct {
 
 }
 
+type playFunc func(context.Context, *pool.Session, pool.Request) error
+
+// acquireForPlayback reserves a session for a new stream. When a stream is
+// already active in the guild it is hot-swapped in place so the worker stays in
+// the call; otherwise a free session is acquired normally.
+func (b *Bot) acquireForPlayback(guildID string) (*pool.Session, playFunc, error) {
+
+	if b.Pool.ActiveInGuild(guildID) != nil {
+
+		session, err := b.Pool.Swap(guildID)
+
+		return session, b.Pool.PlayReusing, err
+
+	}
+
+	session, err := b.Pool.Acquire(guildID)
+
+	return session, b.Pool.Play, err
+
+}
+
 func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, details media.TitleDetails, shareKey string, fid int, videoName string, episode *episodeRef, historyValue string, autoNext *pool.AutoNextContext) {
 
 	b.cancelPendingAutoNext(i.GuildID)
@@ -473,15 +493,6 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 	if channel == nil {
 
 		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("Join a voice channel first, then try again.")})
-		return
-
-	}
-
-	session, err := b.Pool.Acquire(channel.GuildID)
-
-	if err != nil {
-
-		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr(workerErrorMessage(err))})
 		return
 
 	}
@@ -515,13 +526,21 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 
 		if err != nil || resolved == "" {
 
-			b.Pool.Release(session)
 			editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("No playable source was available for that title.")})
 			return
 
 		}
 
 		url = resolved
+
+	}
+
+	session, play, err := b.acquireForPlayback(channel.GuildID)
+
+	if err != nil {
+
+		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr(workerErrorMessage(err))})
+		return
 
 	}
 
@@ -533,7 +552,7 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 	metadata := metadataFromStream(details, shareKey, fid, videoName, target, label, episode, userID(i), captionsPreferred, autoNext, textChannelID, textChannelName)
 	embed := streamingEmbed(details, channel.ID, episode)
 
-	err = b.Pool.Play(context.Background(), session, pool.Request{
+	err = play(context.Background(), session, pool.Request{
 
 		GuildID: channel.GuildID,
 		ChannelID: channel.ID,
@@ -642,7 +661,7 @@ func (b *Bot) resolveLiveTV(title string) (*tvapi.Channel, error) {
 
 }
 
-func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCreate, channel tvapi.Channel, historyTitle, historyValue string) {
+func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCreate, channel tvapi.Channel, historyTitle, historyValue string, record bool) {
 
 	b.cancelPendingAutoNext(i.GuildID)
 
@@ -655,22 +674,21 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 
 	}
 
-	session, err := b.Pool.Acquire(voice.GuildID)
-
-	if err != nil {
-
-		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr(workerErrorMessage(err))})
-		return
-
-	}
-
 	endpoint, err := b.Resolver.TVStreamEndpoint(channel.DaddyID)
 
 	if err != nil || endpoint.URL == "" {
 
-		b.Pool.Release(session)
 		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("No live source was available for that channel.")})
 
+		return
+
+	}
+
+	session, play, err := b.acquireForPlayback(voice.GuildID)
+
+	if err != nil {
+
+		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr(workerErrorMessage(err))})
 		return
 
 	}
@@ -705,7 +723,7 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 
 	}
 
-	err = b.Pool.Play(context.Background(), session, pool.Request{
+	err = play(context.Background(), session, pool.Request{
 
 		GuildID: voice.GuildID,
 		ChannelID: voice.ID,
@@ -805,7 +823,12 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 	components := controlRow(session.ID, false, true)
 
 	editMessage(s, i, &discordgo.WebhookEdit{Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}), Components: ptrComponents(components)})
-	b.recordHistory(i, historyTitle, historyValue)
+
+	if record {
+
+		b.recordHistory(i, historyTitle, historyValue)
+
+	}
 
 }
 

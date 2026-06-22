@@ -27,6 +27,10 @@ type Client struct {
 	idCache map[string]int
 	epCache map[int]epEntry
 
+	guide []networkGuide
+	guideExpiry time.Time
+	guideRefreshing bool
+
 }
 
 type epEntry struct {

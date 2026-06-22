@@ -15,7 +15,7 @@ func (b *Bot) handleChannels(s *discordgo.Session, i *discordgo.InteractionCreat
 
 	_ = deferReply(s, i)
 
-	channels, totalPages, err := b.Resolver.ListTVChannels(1)
+	channels, totalPages, err := b.Resolver.ListTVChannelsGuided(1)
 
 	if err != nil {
 
@@ -69,7 +69,7 @@ func (b *Bot) handleChannelsComponent(s *discordgo.Session, i *discordgo.Interac
 
 		}
 
-		channels, totalPages, err := b.Resolver.ListTVChannels(page)
+		channels, totalPages, err := b.Resolver.ListTVChannelsGuided(page)
 
 		if err != nil || len(channels) == 0 {
 
@@ -87,7 +87,7 @@ func (b *Bot) handleChannelsComponent(s *discordgo.Session, i *discordgo.Interac
 
 		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseDeferredMessageUpdate})
 
-		if err := b.Pool.RequireAvailable(i.GuildID); err != nil {
+		if err := b.Pool.RequireWorker(i.GuildID); err != nil {
 
 			editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr(err.Error())})
 			return
@@ -111,37 +111,93 @@ func (b *Bot) handleChannelsComponent(s *discordgo.Session, i *discordgo.Interac
 
 		}
 
-		b.startLiveStream(s, i, selection.Channel, selection.Channel.Name, values[0])
+		b.startLiveStream(s, i, selection.Channel, selection.Channel.Name, values[0], true)
 
 	}
 
 }
 
-func channelsEmbed(channels []tvapi.Channel, page, totalPages int) *discordgo.MessageEmbed {
+func channelsEmbed(channels []media.GuidedChannel, page, totalPages int) *discordgo.MessageEmbed {
 
 	embed := &discordgo.MessageEmbed{
 
-		Color: embedColor,
-		Title: "Channels",
+		Color:  embedColor,
+		Title:  "Channels",
 		Footer: &discordgo.MessageEmbedFooter{Text: fmt.Sprintf("Page %d of %d", page, totalPages)},
-
 	}
-
-	var lines []string
 
 	for index, channel := range channels {
 
-		lines = append(lines, fmt.Sprintf("**%d.** %s", (page-1)*media.ChannelPageSize+index+1, channelLine(channel)))
+		number := (page-1)*media.ChannelPageSize + index + 1
+		embed.Fields = append(embed.Fields, channelField(number, channel))
 
 	}
-
-	embed.Description = strings.Join(lines, "\n")
 
 	return embed
 
 }
 
-func channelLine(channel tvapi.Channel) string {
+func channelField(number int, guided media.GuidedChannel) *discordgo.MessageEmbedField {
+
+	value := channelGuideSubtext(guided.Now, guided.Next)
+
+	if value == "" {
+
+		value = channelDetailSubtext(guided.Channel)
+
+	}
+
+	return &discordgo.MessageEmbedField{
+
+		Name:  channelHeader(number, guided.Channel),
+		Value: value,
+
+		Inline: true,
+	}
+
+}
+
+func channelDetailSubtext(channel tvapi.Channel) string {
+
+	if detail := channelMeta(channel); detail != "" {
+
+		return detail
+
+	}
+
+	if channel.Status != "" {
+
+		return channel.Status
+
+	}
+
+	return "No details available."
+
+}
+
+func channelHeader(number int, channel tvapi.Channel) string {
+
+	header := fmt.Sprintf("**%d. %s**", number, channel.Name)
+
+	if meta := channelMeta(channel); meta != "" {
+
+		header += " — " + meta
+
+	}
+
+	return header
+
+}
+
+func channelMeta(channel tvapi.Channel) string {
+
+	var parts []string
+
+	if channel.Category != "" {
+
+		parts = append(parts, channel.Category)
+
+	}
 
 	region := channel.Country.Name
 
@@ -151,19 +207,43 @@ func channelLine(channel tvapi.Channel) string {
 
 	}
 
-	category := channel.Category
+	if region != "" {
 
-	if category == "" {
-
-		category = "General"
+		parts = append(parts, region)
 
 	}
 
-	return fmt.Sprintf("%s — %s · %s", channel.Name, category, region)
+	return strings.Join(parts, " · ")
 
 }
 
-func channelsComponents(page, totalPages int, channels []tvapi.Channel) []discordgo.MessageComponent {
+func channelGuideSubtext(now, next string) string {
+
+	var parts []string
+
+	if now != "" {
+
+		parts = append(parts, "Now: "+now)
+
+	}
+
+	if next != "" {
+
+		parts = append(parts, "Next: "+next)
+
+	}
+
+	if len(parts) == 0 {
+
+		return ""
+
+	}
+
+	return strings.Join(parts, " · ") + "\n"
+
+}
+
+func channelsComponents(page, totalPages int, channels []media.GuidedChannel) []discordgo.MessageComponent {
 
 	components := []discordgo.MessageComponent{
 
@@ -178,31 +258,27 @@ func channelsComponents(page, totalPages int, channels []tvapi.Channel) []discor
 			},
 
 		}},
-
 	}
 
 	nav := []discordgo.MessageComponent{
 
 		discordgo.Button{
 
-			Label: "Previous",
+			Label:    "Previous",
 			CustomID: fmt.Sprintf("channels:prev:%d", page),
 
-			Style: discordgo.SecondaryButton,
+			Style:    discordgo.SecondaryButton,
 			Disabled: page <= 1,
-
 		},
 
 		discordgo.Button{
 
-			Label: "Next",
+			Label:    "Next",
 			CustomID: fmt.Sprintf("channels:next:%d", page),
 
-			Style: discordgo.SecondaryButton,
+			Style:    discordgo.SecondaryButton,
 			Disabled: page >= totalPages,
-
 		},
-
 	}
 
 	components = append(components, discordgo.ActionsRow{Components: nav})
@@ -211,15 +287,21 @@ func channelsComponents(page, totalPages int, channels []tvapi.Channel) []discor
 
 }
 
-func channelSelectOptions(channels []tvapi.Channel) []discordgo.SelectMenuOption {
+func channelSelectOptions(channels []media.GuidedChannel) []discordgo.SelectMenuOption {
 
 	options := make([]discordgo.SelectMenuOption, 0, len(channels))
 
-	for _, channel := range channels {
+	for _, guided := range channels {
+
+		channel := guided.Channel
 
 		description := channel.Category
 
-		if channel.Country.Name != "" {
+		if guided.Now != "" {
+
+			description = "Now: " + guided.Now
+
+		} else if channel.Country.Name != "" {
 
 			if description != "" {
 
@@ -233,10 +315,9 @@ func channelSelectOptions(channels []tvapi.Channel) []discordgo.SelectMenuOption
 
 		options = append(options, discordgo.SelectMenuOption{
 
-			Label: truncate(channel.Name, 100),
-			Value: media.TVSelectionValue(channel.DaddyID),
+			Label:       truncate(channel.Name, 100),
+			Value:       media.TVSelectionValue(channel.DaddyID),
 			Description: truncate(description, 100),
-
 		})
 
 	}

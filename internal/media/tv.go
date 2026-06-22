@@ -142,6 +142,59 @@ func TVAutocompleteLabel(channel tvapi.Channel) string {
 
 }
 
+// TVAutocompleteLabelWithShow prefers "Live TV • Show on Channel" when a current
+// show is known, appending the upcoming show when available, and falls back to
+// the plain channel label otherwise.
+func (r *Resolver) TVAutocompleteLabelWithShow(channel tvapi.Channel) string {
+
+	now, next := r.TVNowNext(channel)
+
+	switch {
+
+	case now != "" && next != "":
+
+		return fmt.Sprintf("Live TV • %s on %s · Next: %s", now, channel.Name, next)
+
+	case now != "":
+
+		return fmt.Sprintf("Live TV • %s on %s", now, channel.Name)
+
+	case next != "":
+
+		return fmt.Sprintf("Live TV • %s · Next: %s", channel.Name, next)
+
+	default:
+
+		return TVAutocompleteLabel(channel)
+
+	}
+
+}
+
+// TVNowNext returns the currently airing show and the next show on the channel.
+func (r *Resolver) TVNowNext(channel tvapi.Channel) (string, string) {
+
+	now, next := r.tvmaze.NowNext(channel.Name)
+
+	nowShow := ""
+	nextShow := ""
+
+	if now != nil {
+
+		nowShow = now.Show
+
+	}
+
+	if next != nil {
+
+		nextShow = next.Show
+
+	}
+
+	return nowShow, nextShow
+
+}
+
 func (r *Resolver) TVStreamURL(daddyID string) (string, error) {
 
 	stream, err := r.tv.ResolveStream(daddyID)
