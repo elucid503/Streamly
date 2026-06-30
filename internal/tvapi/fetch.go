@@ -66,6 +66,12 @@ func (c *TVClient) Warmup() {
 
 	})
 
+	c.enrichOnce.Do(func() {
+
+		go c.runEnrichmentLoop()
+
+	})
+
 }
 
 func (c *TVClient) runCatalogRefreshLoop() {
@@ -88,8 +94,11 @@ func (c *TVClient) refreshCatalog() {
 	if _, err := c.fetchCatalog(catalogRefreshTimeout); err != nil {
 
 		log.Printf("[tvapi] catalog refresh failed: %v", err)
+		return
 
 	}
+
+	c.enrichCurrentCatalog()
 
 }
 

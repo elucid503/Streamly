@@ -23,6 +23,7 @@ type Client struct {
 	client *mongo.Client
 	history *mongo.Collection
 	preferences *mongo.Collection
+	hints *mongo.Collection
 
 }
 

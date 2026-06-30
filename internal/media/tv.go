@@ -230,3 +230,9 @@ func TVDetails(channel tvapi.Channel) TitleDetails {
 	}
 
 }
+
+func (r *Resolver) TVChannelThumb(logoURL string) ([]byte, error) {
+
+	return r.tv.ChannelThumb(logoURL)
+
+}

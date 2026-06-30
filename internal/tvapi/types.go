@@ -67,6 +67,8 @@ type Channel struct {
 	Status string `json:"status"`
 
 	Source string `json:"source"`
+
+	Enriched bool `json:"enriched"`
 }
 
 func (channel *Channel) UnmarshalJSON(data []byte) error {

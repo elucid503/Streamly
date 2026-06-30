@@ -145,6 +145,20 @@ func SportsSelectionValue(event tvapi.SportsEvent) string {
 
 }
 
+func (r *Resolver) IsPotentialSportsQuery(query string) bool {
+
+	if strings.TrimSpace(query) == "" {
+
+		return false
+
+	}
+
+	matches, err := r.SportsSearch(query, 1)
+
+	return err == nil && len(matches) > 0
+
+}
+
 func SportsLabel(event tvapi.SportsEvent) string {
 
 	if event.League != "" {

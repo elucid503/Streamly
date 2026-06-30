@@ -29,6 +29,10 @@ type TVClient struct {
 
 	refreshOnce sync.Once
 
+	metadataMu sync.RWMutex
+	metadata *channelMetadataIndex
+	enrichOnce sync.Once
+
 	sportsMu sync.RWMutex
 	sports []SportsEvent
 	sportsAt time.Time

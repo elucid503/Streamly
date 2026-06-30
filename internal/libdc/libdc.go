@@ -5,6 +5,7 @@ package libdc
 /*
 #cgo CXXFLAGS: -std=c++17 -I${SRCDIR}/native -I${SRCDIR}/../../third_party/libdatachannel/include -DRTC_ENABLE_MEDIA -DRTC_STATIC
 #cgo LDFLAGS: -L${SRCDIR}/../../third_party/libdatachannel/build -L${SRCDIR}/../../third_party/libdatachannel/build/deps/libjuice -L${SRCDIR}/../../third_party/libdatachannel/build/deps/libsrtp -L${SRCDIR}/../../third_party/libdatachannel/build/deps/usrsctp/usrsctplib -ldatachannel-static -ljuice -lsrtp2 -lusrsctp -lssl -lcrypto -lstdc++ -lpthread
+#cgo windows LDFLAGS: -lws2_32 -liphlpapi -lbcrypt
 
 #include <stdlib.h>
 #include "native/streamly_dc.h"

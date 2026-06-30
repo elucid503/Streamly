@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -215,6 +216,8 @@ func (b *Bot) handleStream(s *discordgo.Session, i *discordgo.InteractionCreate)
 
 	title := optionString(i, "title")
 
+	go b.sendSportsCTAIfNeeded(s, i, title)
+
 	if live, err := b.resolveLiveTV(title); live != nil {
 
 		if err != nil {
@@ -315,6 +318,44 @@ func (b *Bot) handleStream(s *discordgo.Session, i *discordgo.InteractionCreate)
 	components := []discordgo.MessageComponent{episodeRow(selection.ID, shareKey, 1, episodes)}
 
 	editMessage(s, i, &discordgo.WebhookEdit{Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}), Components: ptrComponents(components)})
+
+}
+
+func (b *Bot) sendSportsCTAIfNeeded(s *discordgo.Session, i *discordgo.InteractionCreate, query string) {
+
+	if b.DB == nil {
+
+		return
+
+	}
+
+	uid := userID(i)
+
+	if uid == "" {
+
+		return
+
+	}
+
+	ctx := context.Background()
+
+	if b.DB.HasSeenHint(ctx, uid, "sports-cta") {
+
+		return
+
+	}
+
+	if !b.Resolver.IsPotentialSportsQuery(query) {
+
+		return
+
+	}
+
+	_ = b.DB.MarkHintSeen(ctx, uid, "sports-cta")
+
+	msg := "**Hint:** use `/sports` to easily find and stream live games."
+
+	_, _ = s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{Content: msg})
 
 }
 
@@ -822,7 +863,26 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 
 	components := controlRow(session.ID, false, true)
 
-	editMessage(s, i, &discordgo.WebhookEdit{Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}), Components: ptrComponents(components)})
+	webhookEdit := &discordgo.WebhookEdit{
+
+		Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}),
+		Components: ptrComponents(components),
+	}
+
+	if thumb, err := b.Resolver.TVChannelThumb(channel.Logo); err == nil && len(thumb) > 0 {
+
+		embed.Thumbnail = &discordgo.MessageEmbedThumbnail{URL: "attachment://channelthumb.png"}
+
+		webhookEdit.Files = []*discordgo.File{{
+
+			Name: "channelthumb.png",
+			ContentType: "image/png",
+			Reader: bytes.NewReader(thumb),
+		}}
+
+	}
+
+	editMessage(s, i, webhookEdit)
 
 	if record {
 
