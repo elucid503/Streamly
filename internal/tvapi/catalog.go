@@ -5,6 +5,56 @@ import (
 	"strings"
 )
 
+// knownSportsSlugs are catalog channels commonly streamed for live games.
+var knownSportsSlugs = map[string]struct{}{
+
+	"espn-usa": {},
+	"espn2-usa": {},
+	"espnews": {},
+	"espnu-usa": {},
+	"espn-deportes": {},
+	"fox-sports-1-usa": {},
+	"fox-sports-2-usa": {},
+	"nfl-network": {},
+	"nfl-redzone": {},
+	"nba-tv-usa": {},
+	"mlb-network-usa": {},
+	"nhl-network-usa": {},
+	"cbs-sports-network": {},
+	"golf-channel-usa": {},
+	"bein-sports-usa": {},
+	"tennis-channel": {},
+	"tnt-sports-1": {},
+	"tnt-sports-2": {},
+	"tnt-sports-3": {},
+	"tnt-sports-4": {},
+	"sky-sports-main-event": {},
+	"sky-sports-football": {},
+	"sky-sports-premier-league": {},
+	"sky-sports-f1-1": {},
+	"sky-sports-cricket": {},
+	"dazn-1-uk": {},
+	"viaplay-sports-1": {},
+	"sportsnet-one": {},
+	"willow-cricket": {},
+	"star-sports": {},
+
+}
+
+func IsSportsChannel(channel Channel) bool {
+
+	if strings.EqualFold(strings.TrimSpace(channel.Category), "Sports") {
+
+		return true
+
+	}
+
+	_, ok := knownSportsSlugs[strings.ToLower(strings.TrimSpace(channel.Slug))]
+
+	return ok
+
+}
+
 var popularUSSlugs = []string{
 
 	"espn-usa",
