@@ -155,7 +155,7 @@ func endedControlRow() []discordgo.MessageComponent {
 
 }
 
-func endedCard(embeds []*discordgo.MessageEmbed, label string) ([]*discordgo.MessageEmbed, []discordgo.MessageComponent) {
+func endedCard(embeds []*discordgo.MessageEmbed, label string, attachments []*discordgo.MessageAttachment) ([]*discordgo.MessageEmbed, []discordgo.MessageComponent) {
 
 	if len(embeds) == 0 {
 
@@ -165,15 +165,56 @@ func endedCard(embeds []*discordgo.MessageEmbed, label string) ([]*discordgo.Mes
 
 	card := *embeds[0]
 	card.Author = &discordgo.MessageEmbedAuthor{Name: label}
+	normalizeEndedThumbnail(&card, attachments)
 
 	return []*discordgo.MessageEmbed{&card}, endedControlRow()
 
 }
 
+// Fixes it so that the thumbnail is not an attachment URL, but a direct URL to the image.
+func normalizeEndedThumbnail(card *discordgo.MessageEmbed, attachments []*discordgo.MessageAttachment) {
+
+	if card.Thumbnail == nil {
+
+		return
+
+	}
+
+	if !strings.HasPrefix(card.Thumbnail.URL, "attachment://") {
+
+		return
+
+	}
+
+	name := strings.TrimPrefix(card.Thumbnail.URL, "attachment://")
+
+	for _, attachment := range attachments {
+
+		if attachment.Filename == name && attachment.URL != "" {
+
+			card.Thumbnail = &discordgo.MessageEmbedThumbnail{URL: attachment.URL}
+			return
+
+		}
+
+	}
+
+	card.Thumbnail = nil
+
+}
+
+func clearAttachments() *[]*discordgo.MessageAttachment {
+
+	empty := []*discordgo.MessageAttachment{}
+
+	return &empty
+
+}
+
 func closeStreamMessage(s *discordgo.Session, i *discordgo.InteractionCreate, embed *discordgo.MessageEmbed, label string) {
 
-	embeds, components := endedCard([]*discordgo.MessageEmbed{embed}, label)
-	_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Embeds: &embeds, Components: &components})
+	embeds, components := endedCard([]*discordgo.MessageEmbed{embed}, label, nil)
+	_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Embeds: &embeds, Components: &components, Attachments: clearAttachments()})
 
 }
 

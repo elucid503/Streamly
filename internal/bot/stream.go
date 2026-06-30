@@ -871,13 +871,16 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 
 	if thumb, err := b.Resolver.TVChannelThumb(channel.Logo); err == nil && len(thumb) > 0 {
 
-		embed.Thumbnail = &discordgo.MessageEmbedThumbnail{URL: "attachment://channelthumb.png"}
+		streamEmbed := *embed
+		streamEmbed.Thumbnail = &discordgo.MessageEmbedThumbnail{URL: "attachment://channelthumb.png"}
 
+		webhookEdit.Embeds = ptrEmbeds([]*discordgo.MessageEmbed{&streamEmbed})
 		webhookEdit.Files = []*discordgo.File{{
 
 			Name: "channelthumb.png",
 			ContentType: "image/png",
 			Reader: bytes.NewReader(thumb),
+
 		}}
 
 	}
@@ -896,9 +899,17 @@ func liveStreamingEmbed(details media.TitleDetails, channel tvapi.Channel, voice
 
 	embed := baseEmbed(details, "Now Streaming")
 
+	category := channel.Category
+
+	if category == "" {
+
+		category = "General"
+
+	}
+
 	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
 
-		Name: "Category", Value: channel.Category, Inline: true,
+		Name: "Category", Value: category, Inline: true,
 	})
 
 	region := channel.Country.Name
@@ -991,8 +1002,8 @@ func (b *Bot) handleStopButton(s *discordgo.Session, i *discordgo.InteractionCre
 
 	}
 
-	embeds, components := endedCard(i.Message.Embeds, "Stream Ended")
-	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseUpdateMessage, Data: &discordgo.InteractionResponseData{Embeds: embeds, Components: components}})
+	embeds, components := endedCard(i.Message.Embeds, "Stream Ended", i.Message.Attachments)
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseUpdateMessage, Data: &discordgo.InteractionResponseData{Embeds: embeds, Components: components, Attachments: clearAttachments()}})
 
 }
 
@@ -1008,8 +1019,8 @@ func (b *Bot) handleToggleButton(s *discordgo.Session, i *discordgo.InteractionC
 
 	if session == nil || !session.Busy {
 
-		embeds, components := endedCard(i.Message.Embeds, "Stream Ended")
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseUpdateMessage, Data: &discordgo.InteractionResponseData{Embeds: embeds, Components: components}})
+		embeds, components := endedCard(i.Message.Embeds, "Stream Ended", i.Message.Attachments)
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseUpdateMessage, Data: &discordgo.InteractionResponseData{Embeds: embeds, Components: components, Attachments: clearAttachments()}})
 
 		return
 
