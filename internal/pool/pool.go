@@ -1050,7 +1050,8 @@ const (
 	liveStableSegmentWindow = 30 * time.Second
 
 	// liveStartupTimeout is how long to wait for the HLS playlist to open before forcing a reconnect.
-	liveStartupTimeout = 10 * time.Second
+	// Must cover open retries plus first-segment fetch on slow live CDNs.
+	liveStartupTimeout = 20 * time.Second
 	// liveProviderFallbackAfter is the number of consecutive failures before trying the fallback provider.
 	liveProviderFallbackAfter = 3
 )

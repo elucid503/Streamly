@@ -22,6 +22,7 @@ extern void streamly_fill_ctas(uintptr_t user, transcode_params_t *params);
 
 #define INPUT_AVIO_SIZE (64 * 1024)
 #define PACKET_QUEUE_CAP 48
+#define PACKET_QUEUE_CAP_LIVE 96
 #define AUDIO_DRAIN_BATCH 3
 #define ERR_BUF 2048
 #define INPUT_OPEN_MAX_RETRIES 5
@@ -89,6 +90,7 @@ typedef struct PacketQueue {
     PacketNode *head;
     PacketNode *tail;
     int count;
+    int capacity;
     bool done;
     int exit_code;
     bool initialized;
@@ -394,19 +396,26 @@ static int open_input_url_once(const char *url, const char *headers, bool live, 
     av_dict_set(&opts, "reconnect", "1", 0);
     av_dict_set(&opts, "reconnect_streamed", "1", 0);
     av_dict_set(&opts, "reconnect_on_network_error", "1", 0);
+    av_dict_set(&opts, "reconnect_on_http_error", "4xx,5xx", 0);
     av_dict_set(&opts, "reconnect_delay_max", "8", 0);
     av_dict_set(&opts, "allowed_extensions", "ALL", 0);
     av_dict_set(&opts, "seg_format_options", "f=mpegts", 0);
-    av_dict_set(&opts, "seg_max_retry", "3", 0);
 
     if (live) {
+        // Start a few segments behind the live edge so short CDN stalls do not underrun.
+        av_dict_set(&opts, "live_start_index", "-3", 0);
+        av_dict_set(&opts, "seg_max_retry", "8", 0);
+        // Keep reloading a static playlist longer before treating it as EOF.
+        av_dict_set(&opts, "m3u8_hold_counters", "10", 0);
         av_dict_set(&opts, "http_multiple", "1", 0);
-        av_dict_set(&opts, "rw_timeout", "20000000", 0);
-        av_dict_set(&opts, "timeout", "20000000", 0);
+        // Fresh connections avoid sticky TLS desyncs seen on flaky live CDNs.
         av_dict_set(&opts, "http_persistent", "0", 0);
-        fmt->probesize = 5000000;
-        fmt->max_analyze_duration = 5000000;
+        av_dict_set(&opts, "rw_timeout", "25000000", 0);
+        av_dict_set(&opts, "timeout", "25000000", 0);
+        fmt->probesize = 8000000;
+        fmt->max_analyze_duration = 8000000;
     } else {
+        av_dict_set(&opts, "seg_max_retry", "3", 0);
         av_dict_set(&opts, "rw_timeout", "30000000", 0);
         av_dict_set(&opts, "timeout", "30000000", 0);
     }
@@ -465,16 +474,23 @@ static int open_input_url(const char *url, const char *headers, bool live, volat
     return last_ret;
 }
 
-static void queue_init(PacketQueue *q) {
+static void queue_init_cap(PacketQueue *q, int capacity) {
 
     pthread_mutex_init(&q->lock, NULL);
     pthread_cond_init(&q->cond, NULL);
     q->head = NULL;
     q->tail = NULL;
     q->count = 0;
+    q->capacity = capacity > 0 ? capacity : PACKET_QUEUE_CAP;
     q->done = false;
     q->exit_code = 0;
     q->initialized = true;
+
+}
+
+static void queue_init(PacketQueue *q) {
+
+    queue_init_cap(q, PACKET_QUEUE_CAP);
 
 }
 
@@ -505,7 +521,9 @@ static int queue_push(PacketQueue *q, AVPacket *pkt) {
 
     pthread_mutex_lock(&q->lock);
 
-    while (q->count >= PACKET_QUEUE_CAP && !q->done) {
+    int cap = q->capacity > 0 ? q->capacity : PACKET_QUEUE_CAP;
+
+    while (q->count >= cap && !q->done) {
         pthread_cond_wait(&q->cond, &q->lock);
     }
 
@@ -1321,7 +1339,7 @@ static int encode_write_frame(OutputPipeline *out, AVFrame *frame) {
 
 static int process_video_packet(transcode_handle_t *handle, StreamPipeline *video, OutputPipeline *vout,
                                 AVFilterContext *filt_src, AVFilterContext *filt_sink,
-                                volatile bool *abort_flag) {
+                                volatile bool *abort_flag, bool live) {
 
     int freeze_stride = 1;
 
@@ -1337,7 +1355,8 @@ static int process_video_packet(transcode_handle_t *handle, StreamPipeline *vide
     int ret = avcodec_send_packet(video->dec, video->pkt);
 
     if (ret < 0) {
-        return ret;
+        // Live HLS regularly ships partial/corrupt segments; skip rather than kill the session.
+        return live ? 0 : ret;
     }
 
     while (ret >= 0) {
@@ -1349,7 +1368,7 @@ static int process_video_packet(transcode_handle_t *handle, StreamPipeline *vide
         }
 
         if (ret < 0) {
-            return ret;
+            return live ? 0 : ret;
         }
 
         if (video->skip_until_us >= 0) {
@@ -1405,14 +1424,14 @@ static int process_video_packet(transcode_handle_t *handle, StreamPipeline *vide
 }
 
 static int process_audio_packet(StreamPipeline *audio, OutputPipeline *aout,
-                                volatile bool *abort_flag) {
+                                volatile bool *abort_flag, bool live) {
 
     SwrContext *swr = aout->swr;
 
     int ret = avcodec_send_packet(audio->dec, audio->pkt);
 
     if (ret < 0) {
-        return ret;
+        return live ? 0 : ret;
     }
 
     while (ret >= 0) {
@@ -1424,7 +1443,7 @@ static int process_audio_packet(StreamPipeline *audio, OutputPipeline *aout,
         }
 
         if (ret < 0) {
-            return ret;
+            return live ? 0 : ret;
         }
 
         if (audio->skip_until_us >= 0) {
@@ -1493,7 +1512,7 @@ static int process_audio_packet(StreamPipeline *audio, OutputPipeline *aout,
 }
 
 static int drain_available_audio(StreamPipeline *audio, OutputPipeline *aout, bool *audio_done,
-                                 volatile bool *abort_flag, bool *progressed) {
+                                 volatile bool *abort_flag, bool *progressed, bool live) {
 
     if (*audio_done) {
         return 0;
@@ -1518,7 +1537,7 @@ static int drain_available_audio(StreamPipeline *audio, OutputPipeline *aout, bo
         av_packet_free(&audio->pkt);
         audio->pkt = apkt;
 
-        int ret = process_audio_packet(audio, aout, abort_flag);
+        int ret = process_audio_packet(audio, aout, abort_flag, live);
 
         if (ret < 0) {
             return ret;
@@ -1700,8 +1719,10 @@ static int transcode_run(struct transcode_handle *handle) {
     pthread_t muxed_thread;
     bool muxed_reader_started = false;
 
-    queue_init(&video.queue);
-    queue_init(&audio.queue);
+    int queue_cap = params.live ? PACKET_QUEUE_CAP_LIVE : PACKET_QUEUE_CAP;
+
+    queue_init_cap(&video.queue, queue_cap);
+    queue_init_cap(&audio.queue, queue_cap);
 
     muxed_reader.fmt = video.fmt;
     muxed_reader.video_stream = video.stream_index;
@@ -1739,7 +1760,8 @@ static int transcode_run(struct transcode_handle *handle) {
                 av_packet_free(&video.pkt);
                 video.pkt = vpkt;
 
-                ret = process_video_packet(handle, &video, &vout, filt_src, filt_sink, params.abort_flag);
+                ret = process_video_packet(handle, &video, &vout, filt_src, filt_sink, params.abort_flag,
+                                           params.live);
 
                 if (ret < 0) {
                     break;
@@ -1749,7 +1771,8 @@ static int transcode_run(struct transcode_handle *handle) {
 
         if (have_audio) {
 
-            ret = drain_available_audio(&audio, &aout, &audio_done, params.abort_flag, &progressed);
+            ret = drain_available_audio(&audio, &aout, &audio_done, params.abort_flag, &progressed,
+                                        params.live);
 
             if (ret < 0) {
                 break;

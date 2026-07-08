@@ -37,8 +37,10 @@ import (
 const videoPacketChannelCap = 120
 const audioPacketChannelCap = 200
 
-const videoPacketChannelCapLive = 150
-const audioPacketChannelCapLive = 250
+// Live channels hold more encoded packets so short CDN stalls do not underrun
+// the Discord sender while libav retries a segment fetch.
+const videoPacketChannelCapLive = 300
+const audioPacketChannelCapLive = 500
 
 type emitTarget struct {
 
