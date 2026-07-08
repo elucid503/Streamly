@@ -62,9 +62,17 @@ sudo apt-get install -y \
 Discord voice requires the DAVE E2EE protocol. Install libdave once:
 
 ```bash
-bash "$(go env GOPATH)/pkg/mod/github.com/disgoorg/godave@v0.1.0/scripts/libdave_install.sh" v1.1.0
+bash "$(go env GOPATH)/pkg/mod/github.com/disgoorg/godave@v0.1.0/scripts/libdave_install.sh" v1.1.1
 export LD_LIBRARY_PATH="$HOME/.local/lib:${LD_LIBRARY_PATH}"
 ```
+
+Windows (PowerShell), from a godave module checkout or after `go mod download`:
+
+```powershell
+& "$(go env GOPATH)\pkg\mod\github.com\disgoorg\godave@v0.1.0\scripts\libdave_install.ps1" -Version "v1.1.1"
+```
+
+v1.1.1+ exports `daveFree`, required so MLS key-package buffers are freed with the same CRT that allocated them (avoids an access violation on stream start).
 
 Use Go 1.24+.
 

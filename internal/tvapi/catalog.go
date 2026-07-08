@@ -8,21 +8,22 @@ import (
 // knownSportsSlugs are catalog channels commonly streamed for live games.
 var knownSportsSlugs = map[string]struct{}{
 
+	"espn": {},
+	"espn-2": {},
 	"espn-usa": {},
-	"espn2-usa": {},
-	"espnews": {},
-	"espnu-usa": {},
+	"espn-news": {},
+	"espn-u": {},
 	"espn-deportes": {},
-	"fox-sports-1-usa": {},
-	"fox-sports-2-usa": {},
+	"fox-sports-1": {},
+	"fox-sports-2": {},
 	"nfl-network": {},
 	"nfl-redzone": {},
-	"nba-tv-usa": {},
-	"mlb-network-usa": {},
-	"nhl-network-usa": {},
+	"nba-tv": {},
+	"mlb-network": {},
+	"nhl-network": {},
 	"cbs-sports-network": {},
-	"golf-channel-usa": {},
-	"bein-sports-usa": {},
+	"golf-channel": {},
+	"bein-sports": {},
 	"tennis-channel": {},
 	"tnt-sports-1": {},
 	"tnt-sports-2": {},
@@ -31,12 +32,11 @@ var knownSportsSlugs = map[string]struct{}{
 	"sky-sports-main-event": {},
 	"sky-sports-football": {},
 	"sky-sports-premier-league": {},
-	"sky-sports-f1-1": {},
+	"sky-sports-f1": {},
 	"sky-sports-cricket": {},
-	"dazn-1-uk": {},
-	"viaplay-sports-1": {},
+	"dazn-1": {},
 	"sportsnet-one": {},
-	"willow-cricket": {},
+	"willow": {},
 	"star-sports": {},
 
 }
@@ -58,33 +58,36 @@ func IsSportsChannel(channel Channel) bool {
 var popularUSSlugs = []string{
 
 	"espn-usa",
-	"cnn-usa",
-	"abc-usa",
-	"cbs-usa",
-	"nbc-usa",
-	"fox-usa",
-	"fox-sports-1-usa",
+	"espn",
+	"cnn",
+	"abc",
+	"cbs",
+	"nbc",
+	"fox",
+	"fox-sports-1",
 	"discovery-channel",
 	"comedy-central",
-	"hbo-usa",
-	"espn2-usa",
-	"tnt-usa",
+	"hbo",
+	"espn-2",
+	"tnt",
 	"usa-network",
-	"fx-usa",
-	"mtv-usa",
+	"fx",
+	"mtv",
 	"disney-channel",
 	"cartoon-network",
 	"national-geographic",
-	"cnbc-usa",
-	"bravo-usa",
+	"cnbc",
+	"bravo",
 
 }
 
 func (catalog *ChannelCatalog) FindByID(ID string) (Channel, bool) {
 
+	ID = strings.TrimSpace(ID)
+
 	for _, channel := range catalog.Channels {
 
-		if channel.DaddyID == ID {
+		if channel.ID == ID {
 
 			return channel, true
 

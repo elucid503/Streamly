@@ -52,8 +52,7 @@ func (country *Country) UnmarshalJSON(data []byte) error {
 }
 
 type Channel struct {
-	ID      string `json:"id"`
-	DaddyID string `json:"daddyId"`
+	ID string `json:"id"`
 
 	Name string `json:"name"`
 	Slug string `json:"slug"`
@@ -68,14 +67,16 @@ type Channel struct {
 
 	Source string `json:"source"`
 
+	// ChannelURL is the ntv/cdnlive player page used to resolve the HLS playlist.
+	ChannelURL string `json:"channelUrl"`
+
 	Enriched bool `json:"enriched"`
 }
 
 func (channel *Channel) UnmarshalJSON(data []byte) error {
 
 	var object struct {
-		ID      flexibleString `json:"id"`
-		DaddyID flexibleString `json:"daddyId"`
+		ID flexibleString `json:"id"`
 
 		Name flexibleString `json:"name"`
 		Slug flexibleString `json:"slug"`
@@ -89,6 +90,8 @@ func (channel *Channel) UnmarshalJSON(data []byte) error {
 		Status flexibleString `json:"status"`
 
 		Source flexibleString `json:"source"`
+
+		ChannelURL flexibleString `json:"channelUrl"`
 	}
 
 	if err := json.Unmarshal(data, &object); err != nil {
@@ -98,7 +101,6 @@ func (channel *Channel) UnmarshalJSON(data []byte) error {
 	}
 
 	channel.ID = string(object.ID)
-	channel.DaddyID = string(object.DaddyID)
 
 	channel.Name = string(object.Name)
 	channel.Slug = string(object.Slug)
@@ -112,6 +114,7 @@ func (channel *Channel) UnmarshalJSON(data []byte) error {
 	channel.Status = string(object.Status)
 
 	channel.Source = string(object.Source)
+	channel.ChannelURL = string(object.ChannelURL)
 
 	return nil
 
@@ -161,22 +164,6 @@ type ChannelCatalog struct {
 	StreamAPI string `json:"streamApi"`
 
 	Channels []Channel `json:"channels"`
-}
-
-type ResolveResult struct {
-	Success bool   `json:"success"`
-	Stream  string `json:"stream"`
-
-	Error string `json:"error"`
-}
-
-type TV247ResolveResult struct {
-	ChannelID string `json:"channelId"`
-
-	ProxyPlaylistURL string `json:"proxyPlaylistUrl"`
-	ProxyPlayerURL   string `json:"proxyPlayerUrl"`
-
-	Error string `json:"error"`
 }
 
 type ResolvedStream struct {

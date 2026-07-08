@@ -9,7 +9,7 @@ import (
 type streamTarget struct {
 
 	FID int
-	DaddyID string
+	ChannelID string
 
 	ShareKey string
 	VideoName string
@@ -41,7 +41,7 @@ func streamTargetFromMetadata(metadata pool.StreamMetadata) streamTarget {
 	return streamTarget{
 
 		FID: metadata.FID,
-		DaddyID: metadata.DaddyID,
+		ChannelID: metadata.ChannelID,
 
 		ShareKey: metadata.ShareKey,
 

@@ -1,51 +1,70 @@
 package tvapi
 
 import (
+	"encoding/json"
 	"fmt"
 	"html"
 	"io"
 	"net/http"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
 
-const sportsTTL = 3 * time.Minute
-
-var (
-
-	sportsCategoryRE = regexp.MustCompile(`(?s)schedule__catHeader.*?card__meta">(.*?)</div>`)
-	sportsEventRE = regexp.MustCompile(`(?s)data-time="([^"]*)"[^>]*>[^<]*</span>\s*<span class="schedule__eventTitle">([^<]*)</span>.*?<div class="schedule__channels">(.*?)</div>`)
-	sportsChannelRE = regexp.MustCompile(`href="/watch\.php\?id=(\d+)"[^>]*\btitle="([^"]*)"`)
-
+const (
+	sportsTTL    = 2 * time.Minute
+	sportsServer = "kobra"
 )
 
-// skippedSportsCategories are listing groups on the schedule that are not games.
-var skippedSportsCategories = map[string]struct{}{
-
-	"tv shows": {},
-
-}
+var (
+	sourceSelectOptionRE = regexp.MustCompile(`(?is)<option[^>]*>(.*?)</option>`)
+)
 
 type SportsChannel struct {
-
-	DaddyID string
-	Name string
-
+	ChannelID string
+	Name      string
 }
 
 type SportsEvent struct {
-
-	Title string
+	ID     string
+	Title  string
 	League string
 
-	Time string
+	Time  string
 	Start time.Time
+	Live  bool
+
+	HomeTeam string
+	AwayTeam string
 
 	Channels []SportsChannel
+}
 
+type ntvMatchesResponse struct {
+	Success bool       `json:"success"`
+	Live    []ntvMatch `json:"live"`
+	NonLive []ntvMatch `json:"nonLive"`
+	All     []ntvMatch `json:"all"`
+}
+
+type ntvMatch struct {
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Category string `json:"category"`
+	Date     int64  `json:"date"`
+	Live     bool   `json:"live"`
+
+	Teams ntvMatchTeams `json:"teams"`
+}
+
+type ntvMatchTeams struct {
+	Home ntvMatchTeam `json:"home"`
+	Away ntvMatchTeam `json:"away"`
+}
+
+type ntvMatchTeam struct {
+	Name string `json:"name"`
 }
 
 func (c *TVClient) Sports() ([]SportsEvent, error) {
@@ -64,7 +83,7 @@ func (c *TVClient) Sports() ([]SportsEvent, error) {
 	}
 
 	// Serve stale data immediately and refresh in the background so callers
-	// (notably autocomplete) never block on a live scrape.
+	// (notably autocomplete) never block on a live fetch.
 	if events != nil {
 
 		c.refreshSportsAsync()
@@ -132,19 +151,20 @@ func (c *TVClient) WarmupSports() {
 
 func (c *TVClient) fetchSports() ([]SportsEvent, error) {
 
-	base := strings.TrimRight(dlhdBaseURL(), "/")
+	// Team-channel matching needs the catalog; best-effort warm if empty.
+	if c.anyCatalog() == nil {
 
-	if base == "" {
-
-		base = dlhdDefaultBaseURL
+		_, _ = c.fetchCatalog(catalogRefreshTimeout)
 
 	}
 
-	response, err := c.get(base+"/", base+"/")
+	url := fmt.Sprintf("%s/api/get-matches?server=%s&type=both", c.baseURL, sportsServer)
+
+	response, err := c.get(url, c.baseURL+"/")
 
 	if err != nil {
 
-		return nil, fmt.Errorf("sports scrape: fetch: %w", err)
+		return nil, fmt.Errorf("sports fetch: %w", err)
 
 	}
 
@@ -152,114 +172,200 @@ func (c *TVClient) fetchSports() ([]SportsEvent, error) {
 
 	if response.StatusCode != http.StatusOK {
 
-		return nil, fmt.Errorf("sports scrape: status %d", response.StatusCode)
+		return nil, fmt.Errorf("sports fetch: status %d", response.StatusCode)
 
 	}
 
-	body, err := io.ReadAll(io.LimitReader(response.Body, 12<<20))
+	body, err := io.ReadAll(io.LimitReader(response.Body, 8<<20))
 
 	if err != nil {
 
-		return nil, fmt.Errorf("sports scrape: read: %w", err)
+		return nil, fmt.Errorf("sports fetch: read: %w", err)
 
 	}
 
-	return parseSportsSchedule(string(body)), nil
+	var payload ntvMatchesResponse
+
+	if err := json.Unmarshal(body, &payload); err != nil {
+
+		return nil, fmt.Errorf("sports fetch: decode: %w", err)
+
+	}
+
+	events := c.mergeNtvMatches(payload)
+	now := time.Now()
+
+	sortSportsEvents(events, now)
+
+	return events, nil
 
 }
 
-func parseSportsSchedule(page string) []SportsEvent {
+func (c *TVClient) mergeNtvMatches(payload ntvMatchesResponse) []SportsEvent {
 
-	categories := sportsCategoryRE.FindAllStringSubmatchIndex(page, -1)
-	events := sportsEventRE.FindAllStringSubmatchIndex(page, -1)
+	seen := make(map[string]struct{}, len(payload.All)+len(payload.Live)+len(payload.NonLive))
+	events := make([]SportsEvent, 0, len(payload.All)+len(payload.Live))
 
-	loc := londonLocation()
-	now := time.Now()
+	appendMatch := func(raw ntvMatch, forceLive bool) {
 
-	seen := make(map[string]struct{}, len(events))
-	parsed := make([]SportsEvent, 0, len(events))
+		id := strings.TrimSpace(raw.ID)
 
-	for _, m := range events {
+		if id == "" {
 
-		league := html.UnescapeString(strings.TrimSpace(categoryBefore(page, categories, m[0])))
-		timeText := strings.TrimSpace(page[m[2]:m[3]])
-		title := html.UnescapeString(strings.TrimSpace(page[m[4]:m[5]]))
-		channelsHTML := page[m[6]:m[7]]
+			return
+
+		}
+
+		if _, dup := seen[id]; dup {
+
+			// A later live copy should upgrade the earlier entry.
+			if forceLive || raw.Live {
+
+				for i := range events {
+
+					if events[i].ID == id {
+
+						events[i].Live = true
+						break
+
+					}
+
+				}
+
+			}
+
+			return
+
+		}
+
+		seen[id] = struct{}{}
+
+		home := strings.TrimSpace(raw.Teams.Home.Name)
+		away := strings.TrimSpace(raw.Teams.Away.Name)
+		title := strings.TrimSpace(raw.Title)
 
 		if title == "" {
 
-			continue
+			switch {
+
+			case home != "" && away != "":
+
+				title = home + " vs " + away
+
+			case home != "":
+
+				title = home
+
+			case away != "":
+
+				title = away
+
+			default:
+
+				return
+
+			}
 
 		}
 
-		if _, skip := skippedSportsCategories[strings.ToLower(league)]; skip {
+		start := time.Time{}
 
-			continue
+		if raw.Date > 0 {
 
-		}
-
-		channels := parseSportsChannels(channelsHTML)
-
-		if len(channels) == 0 {
-
-			continue
+			start = time.UnixMilli(raw.Date).UTC()
 
 		}
 
-		key := strings.ToLower(league + "|" + title + "|" + timeText)
+		league := cleanLeague(raw.Category, title)
+		live := forceLive || raw.Live
 
-		if _, dup := seen[key]; dup {
+		event := SportsEvent{
 
-			continue
+			ID:     id,
+			Title:  title,
+			League: league,
 
+			Time:  formatSportsClock(start),
+			Start: start,
+			Live:  live,
+
+			HomeTeam: home,
+			AwayTeam: away,
+
+			Channels: c.matchChannelsForEvent(home, away),
 		}
 
-		seen[key] = struct{}{}
-
-		parsed = append(parsed, SportsEvent{
-
-			Title: title,
-			League: cleanLeague(league, title),
-
-			Time: timeText,
-			Start: parseScheduleStart(timeText, loc, now),
-
-			Channels: channels,
-
-		})
+		events = append(events, event)
 
 	}
 
-	sortSportsEvents(parsed, now)
+	for _, raw := range payload.Live {
 
-	return parsed
+		appendMatch(raw, true)
+
+	}
+
+	for _, raw := range payload.NonLive {
+
+		appendMatch(raw, false)
+
+	}
+
+	for _, raw := range payload.All {
+
+		appendMatch(raw, false)
+
+	}
+
+	return events
 
 }
 
-func parseSportsChannels(fragment string) []SportsChannel {
+// matchChannelsForEvent finds 24/7 catalog channels for a fixture via exact
+// home/away team channel names. Broadcaster scrape is done on demand at play time.
+func (c *TVClient) matchChannelsForEvent(home, away string) []SportsChannel {
 
-	matches := sportsChannelRE.FindAllStringSubmatch(fragment, -1)
+	catalog := c.cachedCatalog()
 
-	seen := make(map[string]struct{}, len(matches))
-	channels := make([]SportsChannel, 0, len(matches))
+	if catalog == nil {
 
-	for _, m := range matches {
+		return nil
 
-		daddyID := m[1]
+	}
 
-		if _, dup := seen[daddyID]; dup {
+	seen := make(map[string]struct{}, 2)
+	channels := make([]SportsChannel, 0, 2)
+
+	for _, team := range []string{home, away} {
+
+		team = strings.TrimSpace(team)
+
+		if team == "" {
 
 			continue
 
 		}
 
-		seen[daddyID] = struct{}{}
+		channel, ok := catalog.FindByName(team)
+
+		if !ok {
+
+			continue
+
+		}
+
+		if _, dup := seen[channel.ID]; dup {
+
+			continue
+
+		}
+
+		seen[channel.ID] = struct{}{}
 
 		channels = append(channels, SportsChannel{
 
-			DaddyID: daddyID,
-			Name: html.UnescapeString(strings.TrimSpace(m[2])),
-
+			ChannelID: channel.ID,
+			Name:      channel.Name,
 		})
 
 	}
@@ -268,23 +374,252 @@ func parseSportsChannels(fragment string) []SportsChannel {
 
 }
 
-func categoryBefore(page string, categories [][]int, eventStart int) string {
+// ResolveMatchChannel picks a streamable 24/7 channel for a sports fixture:
+// (1) exact home/away team channel name, else (2) broadcaster labels from the
+// watch page matched against the channel catalog.
+func (c *TVClient) ResolveMatchChannel(event SportsEvent) (Channel, bool) {
 
-	league := ""
+	return c.ResolveMatchChannelForTeam(event, "")
 
-	for _, c := range categories {
+}
 
-		if c[0] >= eventStart {
+// ResolveMatchChannelForTeam prefers the named team's dedicated channel when present.
+func (c *TVClient) ResolveMatchChannelForTeam(event SportsEvent, preferTeam string) (Channel, bool) {
 
-			break
+	catalog := c.cachedCatalog()
 
-		}
+	if catalog == nil {
 
-		league = page[c[2]:c[3]]
+		return Channel{}, false
 
 	}
 
-	return league
+	preferTeam = strings.TrimSpace(preferTeam)
+
+	if preferTeam != "" {
+
+		if channel, ok := catalog.FindByName(preferTeam); ok {
+
+			return channel, true
+
+		}
+
+	}
+
+	for _, linked := range event.Channels {
+
+		if channel, ok := catalog.FindByID(linked.ChannelID); ok {
+
+			return channel, true
+
+		}
+
+	}
+
+	for _, team := range []string{event.HomeTeam, event.AwayTeam} {
+
+		if channel, ok := catalog.FindByName(team); ok {
+
+			return channel, true
+
+		}
+
+	}
+
+	broadcasters := c.scrapeMatchBroadcasters(event.ID)
+
+	for _, name := range broadcasters {
+
+		if channel, ok := catalog.FindByName(name); ok {
+
+			return channel, true
+
+		}
+
+		hits := catalog.Search(name, 1)
+
+		if len(hits) > 0 {
+
+			return hits[0], true
+
+		}
+
+	}
+
+	return Channel{}, false
+
+}
+
+func (c *TVClient) scrapeMatchBroadcasters(matchID string) []string {
+
+	matchID = strings.TrimSpace(matchID)
+
+	if matchID == "" {
+
+		return nil
+
+	}
+
+	watchURL := fmt.Sprintf("%s/watch/%s/%s", c.baseURL, sportsServer, matchID)
+
+	response, err := c.get(watchURL, c.baseURL+"/")
+
+	if err != nil {
+
+		return nil
+
+	}
+
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+
+		return nil
+
+	}
+
+	body, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
+
+	if err != nil {
+
+		return nil
+
+	}
+
+	return parseSourceSelectBroadcasters(string(body))
+
+}
+
+func parseSourceSelectBroadcasters(page string) []string {
+
+	// Prefer the sourceSelect block when present.
+	lower := strings.ToLower(page)
+	start := strings.Index(lower, `id="sourceselect"`)
+
+	if start < 0 {
+
+		start = strings.Index(lower, "id='sourceselect'")
+
+	}
+
+	fragment := page
+
+	if start >= 0 {
+
+		end := strings.Index(lower[start:], "</select>")
+
+		if end > 0 {
+
+			fragment = page[start : start+end]
+
+		}
+
+	}
+
+	matches := sourceSelectOptionRE.FindAllStringSubmatch(fragment, -1)
+	seen := make(map[string]struct{}, len(matches))
+	names := make([]string, 0, len(matches))
+
+	for _, m := range matches {
+
+		label := html.UnescapeString(strings.TrimSpace(stripTags(m[1])))
+
+		if label == "" {
+
+			continue
+
+		}
+
+		broadcaster := broadcasterFromSourceLabel(label)
+
+		if broadcaster == "" {
+
+			continue
+
+		}
+
+		key := strings.ToLower(broadcaster)
+
+		if _, dup := seen[key]; dup {
+
+			continue
+
+		}
+
+		seen[key] = struct{}{}
+		names = append(names, broadcaster)
+
+	}
+
+	return names
+
+}
+
+// broadcasterFromSourceLabel parses labels like
+// "Server Kobra - ADMIN - English - NBC Sports BA - Stream 1 [HD]".
+func broadcasterFromSourceLabel(label string) string {
+
+	parts := strings.Split(label, " - ")
+
+	for i := range parts {
+
+		parts[i] = strings.TrimSpace(parts[i])
+
+	}
+
+	if len(parts) < 4 {
+
+		return ""
+
+	}
+
+	// Skip source-only labels (ADMIN/ECHO/GOLF) without a channel name.
+	name := parts[3]
+
+	if name == "" {
+
+		return ""
+
+	}
+
+	// Drop trailing "Stream N" segments if the label was over-split.
+	if strings.HasPrefix(strings.ToLower(name), "stream ") {
+
+		return ""
+
+	}
+
+	return name
+
+}
+
+func stripTags(value string) string {
+
+	var b strings.Builder
+
+	inTag := false
+
+	for _, r := range value {
+
+		switch {
+
+		case r == '<':
+
+			inTag = true
+
+		case r == '>':
+
+			inTag = false
+
+		case !inTag:
+
+			b.WriteRune(r)
+
+		}
+
+	}
+
+	return b.String()
 
 }
 
@@ -298,32 +633,36 @@ func cleanLeague(league, title string) string {
 
 	}
 
-	return league
+	league = strings.ReplaceAll(league, "-", " ")
+	words := strings.Fields(league)
+
+	for i, word := range words {
+
+		if word == "" {
+
+			continue
+
+		}
+
+		words[i] = strings.ToUpper(word[:1]) + strings.ToLower(word[1:])
+
+	}
+
+	return strings.Join(words, " ")
 
 }
 
-func parseScheduleStart(timeText string, loc *time.Location, now time.Time) time.Time {
+func formatSportsClock(start time.Time) string {
 
-	parts := strings.SplitN(strings.TrimSpace(timeText), ":", 2)
+	if start.IsZero() {
 
-	if len(parts) != 2 {
-
-		return time.Time{}
+		return ""
 
 	}
 
-	hour, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
-	minute, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+	local := start.Local()
 
-	if err1 != nil || err2 != nil {
-
-		return time.Time{}
-
-	}
-
-	local := now.In(loc)
-
-	return time.Date(local.Year(), local.Month(), local.Day(), hour, minute, 0, 0, loc)
+	return local.Format("3:04 PM")
 
 }
 
@@ -332,29 +671,32 @@ func sortSportsEvents(events []SportsEvent, now time.Time) {
 
 	bucket := func(e SportsEvent) int {
 
+		if e.Live {
+
+			return 0
+
+		}
+
 		if e.Start.IsZero() {
 
 			return 3
 
 		}
 
-		delta := now.Sub(e.Start)
-
-		switch {
-
-		case delta >= 0 && delta <= 3*time.Hour:
-
-			return 0
-
-		case delta < 0:
+		if e.Start.After(now) {
 
 			return 1
 
-		default:
+		}
 
-			return 2
+		// Recently started without live flag still ranks ahead of older past games.
+		if now.Sub(e.Start) <= 3*time.Hour {
+
+			return 0
 
 		}
+
+		return 2
 
 	}
 
@@ -389,16 +731,253 @@ func sortSportsEvents(events []SportsEvent, now time.Time) {
 
 }
 
-func londonLocation() *time.Location {
+// Teams returns unique team names from the sports schedule for autocomplete.
+func (c *TVClient) Teams(query string, limit int) ([]string, error) {
 
-	loc, err := time.LoadLocation("Europe/London")
+	events, err := c.Sports()
 
 	if err != nil {
 
-		return time.UTC
+		return nil, err
 
 	}
 
-	return loc
+	if limit <= 0 {
+
+		limit = 25
+
+	}
+
+	query = strings.ToLower(strings.TrimSpace(query))
+	seen := make(map[string]struct{}, 64)
+	teams := make([]string, 0, limit)
+
+	add := func(name string) {
+
+		name = strings.TrimSpace(name)
+
+		if name == "" {
+
+			return
+
+		}
+
+		key := strings.ToLower(name)
+
+		if _, dup := seen[key]; dup {
+
+			return
+
+		}
+
+		if query != "" && !strings.Contains(key, query) {
+
+			return
+
+		}
+
+		seen[key] = struct{}{}
+		teams = append(teams, name)
+
+	}
+
+	for _, event := range events {
+
+		add(event.HomeTeam)
+		add(event.AwayTeam)
+
+		if len(teams) >= limit {
+
+			break
+
+		}
+
+	}
+
+	// When the user is typing, supplement with catalog names so teams without a
+	// scheduled match (and dedicated 24/7 channels) still autocomplete.
+	if query != "" && len(teams) < limit {
+
+		if catalog := c.cachedCatalog(); catalog != nil {
+
+			for _, channel := range catalog.Search(query, limit*2) {
+
+				// Prefer multi-word names (typical team channels over "ESPN").
+				if strings.Count(strings.TrimSpace(channel.Name), " ") < 1 {
+
+					continue
+
+				}
+
+				add(channel.Name)
+
+				if len(teams) >= limit {
+
+					break
+
+				}
+
+			}
+
+		}
+
+	}
+
+	if len(teams) > limit {
+
+		teams = teams[:limit]
+
+	}
+
+	return teams, nil
+
+}
+
+// FindTeamEvent finds a live/starting event involving the given team.
+func (c *TVClient) FindTeamEvent(team string) (SportsEvent, bool) {
+
+	team = strings.ToLower(strings.TrimSpace(team))
+
+	if team == "" {
+
+		return SportsEvent{}, false
+
+	}
+
+	events, err := c.Sports()
+
+	if err != nil {
+
+		return SportsEvent{}, false
+
+	}
+
+	now := time.Now()
+
+	for _, event := range events {
+
+		if !teamInEvent(event, team) {
+
+			continue
+
+		}
+
+		if sportsEventActive(event, now) {
+
+			return event, true
+
+		}
+
+	}
+
+	return SportsEvent{}, false
+
+}
+
+func teamInEvent(event SportsEvent, teamLower string) bool {
+
+	return strings.EqualFold(event.HomeTeam, teamLower) ||
+		strings.EqualFold(event.AwayTeam, teamLower) ||
+		strings.Contains(strings.ToLower(event.HomeTeam), teamLower) ||
+		strings.Contains(strings.ToLower(event.AwayTeam), teamLower) ||
+		strings.Contains(strings.ToLower(event.Title), teamLower)
+
+}
+
+// sportsEventActive is true for live fixtures and ones that just started or are about to.
+func sportsEventActive(event SportsEvent, now time.Time) bool {
+
+	if event.Live {
+
+		return true
+
+	}
+
+	if event.Start.IsZero() {
+
+		return false
+
+	}
+
+	// Join a couple minutes early through a few hours after tip-off.
+	if now.Before(event.Start.Add(-2 * time.Minute)) {
+
+		return false
+
+	}
+
+	return now.Sub(event.Start) <= 3*time.Hour
+
+}
+
+// Opponent returns the non-subscribed team name for announce messages.
+func (event SportsEvent) Opponent(team string) string {
+
+	team = strings.TrimSpace(team)
+
+	if team == "" {
+
+		return fallbackTeam(event)
+
+	}
+
+	if strings.EqualFold(event.HomeTeam, team) {
+
+		return fallback(event.AwayTeam, fallbackTeam(event))
+
+	}
+
+	if strings.EqualFold(event.AwayTeam, team) {
+
+		return fallback(event.HomeTeam, fallbackTeam(event))
+
+	}
+
+	// Partial match: prefer the side that did not match.
+	lower := strings.ToLower(team)
+
+	if strings.Contains(strings.ToLower(event.HomeTeam), lower) {
+
+		return fallback(event.AwayTeam, fallbackTeam(event))
+
+	}
+
+	if strings.Contains(strings.ToLower(event.AwayTeam), lower) {
+
+		return fallback(event.HomeTeam, fallbackTeam(event))
+
+	}
+
+	return fallbackTeam(event)
+
+}
+
+func fallbackTeam(event SportsEvent) string {
+
+	if event.AwayTeam != "" {
+
+		return event.AwayTeam
+
+	}
+
+	if event.HomeTeam != "" {
+
+		return event.HomeTeam
+
+	}
+
+	return "Opponent"
+
+}
+
+func fallback(value, defaultValue string) string {
+
+	if strings.TrimSpace(value) == "" {
+
+		return defaultValue
+
+	}
+
+	return value
 
 }

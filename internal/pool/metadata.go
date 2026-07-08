@@ -36,7 +36,7 @@ type StreamMetadata struct {
 
 	FID int
 	UserID string
-	DaddyID string
+	ChannelID string
 
 	ShareKey string
 

@@ -1,7 +1,6 @@
 package tvapi
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -10,34 +9,33 @@ import (
 	"time"
 )
 
-const catalogTTL = 15 * time.Minute
+const (
+	defaultTVBaseURL = "https://ntv.cx"
+	catalogTTL       = 15 * time.Minute
+)
 
 type TVOptions struct {
-
 	BaseURL string
-
 }
 
 type TVClient struct {
-
 	baseURL string
-	client *http.Client
+	client  *http.Client
 
 	catalogMu sync.RWMutex
-	catalog *ChannelCatalog
+	catalog   *ChannelCatalog
 	catalogAt time.Time
 
 	refreshOnce sync.Once
 
 	metadataMu sync.RWMutex
-	metadata *channelMetadataIndex
+	metadata   *channelMetadataIndex
 	enrichOnce sync.Once
 
-	sportsMu sync.RWMutex
-	sports []SportsEvent
-	sportsAt time.Time
+	sportsMu         sync.RWMutex
+	sports           []SportsEvent
+	sportsAt         time.Time
 	sportsRefreshing bool
-
 }
 
 func NewTVClient(options TVOptions) *TVClient {
@@ -50,6 +48,11 @@ func NewTVClient(options TVOptions) *TVClient {
 
 	}
 
+	if baseURL == "" {
+
+		baseURL = defaultTVBaseURL
+
+	}
 
 	client := &TVClient{
 
@@ -58,9 +61,7 @@ func NewTVClient(options TVOptions) *TVClient {
 		client: &http.Client{
 
 			Timeout: 30 * time.Second,
-
 		},
-
 	}
 
 	seedEmbeddedCatalog(client)
@@ -69,9 +70,15 @@ func NewTVClient(options TVOptions) *TVClient {
 
 }
 
-func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
+func (c *TVClient) BaseURL() string {
 
-	stream, err := c.ResolveStream(daddyID)
+	return c.baseURL
+
+}
+
+func (c *TVClient) ResolveHLS(channelID string) (string, error) {
+
+	stream, err := c.ResolveStream(channelID)
 
 	if err != nil {
 
@@ -83,75 +90,17 @@ func (c *TVClient) ResolveHLS(daddyID string) (string, error) {
 
 }
 
-func parseResolveResponse(body []byte) (string, error) {
-
-	var tv247 TV247ResolveResult
-
-	if err := json.Unmarshal(body, &tv247); err == nil {
-
-		if tv247.Error != "" {
-
-			return "", fmt.Errorf("resolve failed: %s", tv247.Error)
-
-		}
-
-		if tv247.ProxyPlaylistURL != "" {
-
-			return tv247.ProxyPlaylistURL, nil
-
-		}
-
-	}
-
-	var legacy ResolveResult
-
-	if err := json.Unmarshal(body, &legacy); err != nil {
-
-		return "", fmt.Errorf("decode resolve response: %w", err)
-
-	}
-
-	if !legacy.Success {
-
-		msg := legacy.Error
-
-		if msg == "" {
-
-			msg = string(body)
-
-		}
-
-		return "", fmt.Errorf("resolve failed: %s", msg)
-
-	}
-
-	if legacy.Stream == "" {
-
-		return "", nil
-
-	}
-
-	streamPath := legacy.Stream
-
-	if strings.HasPrefix(streamPath, "http://") || strings.HasPrefix(streamPath, "https://") {
-
-		return streamPath, nil
-
-	}
-
-	if !strings.HasPrefix(streamPath, "/") {
-
-		streamPath = "/" + streamPath
-
-	}
-
-	return streamPath, nil
-
-}
-
 func (c *TVClient) ResolveChannel(channel Channel) (*StreamInfo, error) {
 
-	hls, err := c.ResolveHLS(channel.DaddyID)
+	id := strings.TrimSpace(channel.ID)
+
+	if id == "" {
+
+		return nil, fmt.Errorf("channel id is required")
+
+	}
+
+	hls, err := c.ResolveHLS(id)
 
 	if err != nil {
 
@@ -162,8 +111,7 @@ func (c *TVClient) ResolveChannel(channel Channel) (*StreamInfo, error) {
 	return &StreamInfo{
 
 		Channel: channel,
-		HLSURL: hls,
-
+		HLSURL:  hls,
 	}, nil
 
 }

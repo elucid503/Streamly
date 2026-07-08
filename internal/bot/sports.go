@@ -2,6 +2,7 @@ package bot
 
 import (
 	"streamly/internal/media"
+	"streamly/internal/tvapi"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -28,9 +29,38 @@ func (b *Bot) handleSports(s *discordgo.Session, i *discordgo.InteractionCreate)
 
 	}
 
-	channel := media.SportsChannel(*selection)
+	channel, err := b.Resolver.ResolveSportsSelectionChannel(*selection)
 
-	b.startLiveStream(s, i, channel, channel.Name, "", false)
+	if err != nil || channel.ID == "" {
+
+		editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("Couldn't find a streamable channel for that game right now.")})
+		return
+
+	}
+
+	// Prefer the match title for the stream card when we resolved a network/team channel.
+	display := channel
+
+	if selection.Title != "" {
+
+		display.Name = selection.Title
+
+	}
+
+	if selection.League != "" {
+
+		display.Category = selection.League
+
+	}
+
+	historyValue := media.SportsSelectionValue(tvapi.SportsEvent{
+
+		ID:       selection.MatchID,
+		Title:    selection.Title,
+		Channels: []tvapi.SportsChannel{{ChannelID: channel.ID, Name: channel.Name}},
+	})
+
+	b.startLiveStream(s, i, display, display.Name, historyValue, false)
 
 }
 
@@ -58,9 +88,8 @@ func (b *Bot) sportsGameChoices(query string) []*discordgo.ApplicationCommandOpt
 
 		choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
 
-			Name: truncate(media.SportsLabel(event), 100),
+			Name:  truncate(media.SportsLabel(event), 100),
 			Value: value,
-
 		})
 
 	}

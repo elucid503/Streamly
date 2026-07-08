@@ -11,10 +11,8 @@ import (
 const tvSelectionPrefix = "tv:"
 
 type TVSelection struct {
-
-	DaddyID string
-	Channel tvapi.Channel
-
+	ChannelID string
+	Channel   tvapi.Channel
 }
 
 func (r *Resolver) SearchTV(query string, limit int) ([]tvapi.Channel, error) {
@@ -55,7 +53,7 @@ func (r *Resolver) ResolveTVSelection(value string) (*TVSelection, error) {
 
 	}
 
-	if match := regexp.MustCompile(`^tv:(\d+)$`).FindStringSubmatch(value); len(match) == 2 {
+	if match := regexp.MustCompile(`^tv:(.+)$`).FindStringSubmatch(value); len(match) == 2 {
 
 		catalog, err := r.tv.ListChannels()
 
@@ -69,14 +67,13 @@ func (r *Resolver) ResolveTVSelection(value string) (*TVSelection, error) {
 
 		if !ok {
 
-			return nil, fmt.Errorf("channel not found: daddyId %s", match[1])
+			return nil, fmt.Errorf("channel not found: %s", match[1])
 		}
 
 		return &TVSelection{
 
-			DaddyID: channel.DaddyID,
-			Channel: channel,
-
+			ChannelID: channel.ID,
+			Channel:   channel,
 		}, nil
 
 	}
@@ -93,9 +90,8 @@ func (r *Resolver) ResolveTVSelection(value string) (*TVSelection, error) {
 
 		return &TVSelection{
 
-			DaddyID: channel.DaddyID,
-			Channel: channel,
-
+			ChannelID: channel.ID,
+			Channel:   channel,
 		}, nil
 
 	}
@@ -104,9 +100,8 @@ func (r *Resolver) ResolveTVSelection(value string) (*TVSelection, error) {
 
 		return &TVSelection{
 
-			DaddyID: channel.DaddyID,
-			Channel: channel,
-
+			ChannelID: channel.ID,
+			Channel:   channel,
 		}, nil
 
 	}
@@ -123,16 +118,15 @@ func (r *Resolver) ResolveTVSelection(value string) (*TVSelection, error) {
 
 	return &TVSelection{
 
-		DaddyID: channel.DaddyID,
-		Channel: channel,
-
+		ChannelID: channel.ID,
+		Channel:   channel,
 	}, nil
 
 }
 
-func TVSelectionValue(daddyID string) string {
+func TVSelectionValue(channelID string) string {
 
-	return tvSelectionPrefix + daddyID
+	return tvSelectionPrefix + channelID
 
 }
 
@@ -195,9 +189,9 @@ func (r *Resolver) TVNowNext(channel tvapi.Channel) (string, string) {
 
 }
 
-func (r *Resolver) TVStreamURL(daddyID string) (string, error) {
+func (r *Resolver) TVStreamURL(channelID string) (string, error) {
 
-	stream, err := r.tv.ResolveStream(daddyID)
+	stream, err := r.tv.ResolveStream(channelID)
 
 	if err != nil {
 
@@ -208,15 +202,9 @@ func (r *Resolver) TVStreamURL(daddyID string) (string, error) {
 
 }
 
-func (r *Resolver) TVStreamEndpoint(daddyID string) (tvapi.ResolvedStream, error) {
+func (r *Resolver) TVStreamEndpoint(channelID string) (tvapi.ResolvedStream, error) {
 
-	return r.tv.ResolveStream(daddyID)
-
-}
-
-func (r *Resolver) TVStreamEndpointFallback(daddyID string) (tvapi.ResolvedStream, error) {
-
-	return r.tv.ResolveStreamFallback(daddyID)
+	return r.tv.ResolveStream(channelID)
 
 }
 
@@ -224,9 +212,8 @@ func TVDetails(channel tvapi.Channel) TitleDetails {
 
 	return TitleDetails{
 
-		Title: channel.Name,
+		Title:  channel.Name,
 		Poster: channel.Logo,
-
 	}
 
 }

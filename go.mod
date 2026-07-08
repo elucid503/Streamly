@@ -14,6 +14,10 @@ require (
 	go.mongodb.org/mongo-driver v1.17.9
 )
 
+// libdave prebuilts on Windows allocate with the MSVC CRT; godave's C.free is MinGW and
+// crashes in GetMarshalledKeyPackage. Patched to free via daveFree (or leak on older DLLs).
+replace github.com/disgoorg/godave/libdave => ./third_party/godave-libdave
+
 require (
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/golang/snappy v0.0.4 // indirect

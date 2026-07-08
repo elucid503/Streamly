@@ -251,12 +251,10 @@ func channelsComponents(page, totalPages int, channels []media.GuidedChannel) []
 
 			discordgo.SelectMenu{
 
-				CustomID: fmt.Sprintf("channels:pick:%d", page),
+				CustomID:    fmt.Sprintf("channels:pick:%d", page),
 				Placeholder: "Choose a channel to watch",
-				Options: channelSelectOptions(channels),
-
+				Options:     channelSelectOptions(channels),
 			},
-
 		}},
 	}
 
@@ -316,7 +314,7 @@ func channelSelectOptions(channels []media.GuidedChannel) []discordgo.SelectMenu
 		options = append(options, discordgo.SelectMenuOption{
 
 			Label:       truncate(channel.Name, 100),
-			Value:       media.TVSelectionValue(channel.DaddyID),
+			Value:       media.TVSelectionValue(channel.ID),
 			Description: truncate(description, 100),
 		})
 

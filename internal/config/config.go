@@ -114,7 +114,15 @@ func FebboxStreamHeaders() map[string]string {
 
 func TVBaseURL() string {
 
-	return strings.TrimRight(strings.TrimSpace(os.Getenv("TV_BASE_URL")), "/")
+	base := strings.TrimRight(strings.TrimSpace(os.Getenv("TV_BASE_URL")), "/")
+
+	if base == "" {
+
+		return "https://ntv.cx"
+
+	}
+
+	return base
 
 }
 

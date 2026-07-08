@@ -4,12 +4,9 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"html"
 	"io"
 	"log"
 	"net/http"
-	"os"
-	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -18,12 +15,21 @@ import (
 //go:embed data/tv-channels.json
 var embeddedCatalogJSON []byte
 
-const (
-	dlhdDefaultBaseURL    = "https://dlhd.pk"
-	catalogRefreshTimeout = 45 * time.Second
-)
+const catalogRefreshTimeout = 45 * time.Second
 
-var channelCardPattern = regexp.MustCompile(`href="/watch\.php\?id=(\d+)"\s+data-title="([^"]+)"`)
+type ntvChannelsResponse struct {
+	Success  bool         `json:"success"`
+	Channels []ntvChannel `json:"channels"`
+}
+
+type ntvChannel struct {
+	ChannelID    string `json:"channel_id"`
+	ChannelName  string `json:"channel_name"`
+	ChannelCode  string `json:"channel_code"`
+	ChannelImage string `json:"channel_image"`
+	ChannelURL   string `json:"channel_url"`
+	Server       string `json:"server"`
+}
 
 func seedEmbeddedCatalog(c *TVClient) {
 
@@ -48,7 +54,7 @@ func (c *TVClient) ListChannels() (*ChannelCatalog, error) {
 
 	}
 
-	return nil, fmt.Errorf("catalog unavailable")
+	return c.fetchCatalog(catalogRefreshTimeout)
 
 }
 
@@ -106,7 +112,7 @@ func (c *TVClient) fetchCatalog(timeout time.Duration) (*ChannelCatalog, error) 
 
 	client := &http.Client{Timeout: timeout}
 
-	catalog, err := scrapeDLHDChannels(client)
+	catalog, err := fetchNtvChannels(client, c.baseURL)
 
 	if err != nil {
 
@@ -116,41 +122,41 @@ func (c *TVClient) fetchCatalog(timeout time.Duration) (*ChannelCatalog, error) 
 
 	c.storeCatalog(catalog)
 
-	log.Printf("[tv] catalog refreshed from dlhd.pk (%d channels)", len(catalog.Channels))
+	log.Printf("[tv] catalog refreshed from ntv (%d channels)", len(catalog.Channels))
 
 	return catalog, nil
 
 }
 
-func scrapeDLHDChannels(client *http.Client) (*ChannelCatalog, error) {
+func fetchNtvChannels(client *http.Client, baseURL string) (*ChannelCatalog, error) {
 
-	base := strings.TrimRight(strings.TrimSpace(os.Getenv("TV_DLHD_BASE_URL")), "/")
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 
-	if base == "" {
+	if baseURL == "" {
 
-		base = dlhdDefaultBaseURL
+		baseURL = defaultTVBaseURL
 
 	}
 
-	pageURL := base + "/24-7-channels.php"
+	pageURL := baseURL + "/api/get-channels"
 
 	request, err := http.NewRequest(http.MethodGet, pageURL, nil)
 
 	if err != nil {
 
-		return nil, fmt.Errorf("dlhd scrape: build request: %w", err)
+		return nil, fmt.Errorf("ntv channels: build request: %w", err)
 
 	}
 
 	request.Header.Set("User-Agent", tvBrowserUA)
+	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	request.Header.Set("Referer", base+"/")
 
 	response, err := client.Do(request)
 
 	if err != nil {
 
-		return nil, fmt.Errorf("dlhd scrape: fetch: %w", err)
+		return nil, fmt.Errorf("ntv channels: fetch: %w", err)
 
 	}
 
@@ -158,63 +164,95 @@ func scrapeDLHDChannels(client *http.Client) (*ChannelCatalog, error) {
 
 	if response.StatusCode != http.StatusOK {
 
-		return nil, fmt.Errorf("dlhd scrape: status %d", response.StatusCode)
+		return nil, fmt.Errorf("ntv channels: status %d", response.StatusCode)
 
 	}
 
-	body, err := io.ReadAll(io.LimitReader(response.Body, 8<<20))
+	body, err := io.ReadAll(io.LimitReader(response.Body, 12<<20))
 
 	if err != nil {
 
-		return nil, fmt.Errorf("dlhd scrape: read: %w", err)
+		return nil, fmt.Errorf("ntv channels: read: %w", err)
 
 	}
 
-	matches := channelCardPattern.FindAllSubmatch(body, -1)
+	var payload ntvChannelsResponse
 
-	seen := make(map[string]struct{}, len(matches))
-	channels := make([]Channel, 0, len(matches))
+	if err := json.Unmarshal(body, &payload); err != nil {
 
-	for _, m := range matches {
+		return nil, fmt.Errorf("ntv channels: decode: %w", err)
 
-		daddyID := string(m[1])
+	}
 
-		if _, dup := seen[daddyID]; dup {
+	if !payload.Success && len(payload.Channels) == 0 {
+
+		return nil, fmt.Errorf("ntv channels: empty response")
+
+	}
+
+	seen := make(map[string]struct{}, len(payload.Channels))
+	channels := make([]Channel, 0, len(payload.Channels))
+
+	for _, raw := range payload.Channels {
+
+		if !strings.EqualFold(strings.TrimSpace(raw.Server), "cdnlive") {
 
 			continue
 
 		}
 
-		seen[daddyID] = struct{}{}
+		id := strings.TrimSpace(raw.ChannelID)
+		name := strings.TrimSpace(raw.ChannelName)
 
-		name := html.UnescapeString(string(m[2]))
-		slug := makeChannelSlug(name)
+		if id == "" || name == "" {
+
+			continue
+
+		}
+
+		if _, dup := seen[id]; dup {
+
+			continue
+
+		}
+
+		seen[id] = struct{}{}
+
+		code := strings.ToLower(strings.TrimSpace(raw.ChannelCode))
+		image := strings.TrimSpace(raw.ChannelImage)
 
 		channels = append(channels, Channel{
 
-			ID:      "dl-" + daddyID,
-			DaddyID: daddyID,
-			Name:    titleCase(name),
-			Slug:    slug,
-			Logo:    base + "/logos/" + makeLogoSlug(name) + ".png",
-			Source:  "tv247",
+			ID:   id,
+			Name: name,
+			Slug: makeChannelSlug(name),
 
+			Logo:  image,
+			Image: image,
+
+			Country: Country{
+
+				Code: code,
+				Name: strings.ToUpper(code),
+			},
+
+			ChannelURL: strings.TrimSpace(raw.ChannelURL),
+			Source:     "cdnlive",
 		})
 
 	}
 
 	if len(channels) == 0 {
 
-		return nil, fmt.Errorf("dlhd scrape: no channels found in page")
+		return nil, fmt.Errorf("ntv channels: no cdnlive channels found")
 
 	}
 
 	return &ChannelCatalog{
 
-		Source:   "tv247",
+		Source:   "ntv",
 		Total:    len(channels),
 		Channels: channels,
-
 	}, nil
 
 }
@@ -244,34 +282,6 @@ func makeChannelSlug(name string) string {
 	}
 
 	return strings.Trim(b.String(), "-")
-
-}
-
-func makeLogoSlug(name string) string {
-
-	name = strings.ToLower(name)
-
-	var b strings.Builder
-
-	prev := '_'
-
-	for _, r := range name {
-
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-
-			b.WriteRune(r)
-			prev = r
-
-		} else if prev != '_' {
-
-			b.WriteByte('_')
-			prev = '_'
-
-		}
-
-	}
-
-	return strings.Trim(b.String(), "_")
 
 }
 

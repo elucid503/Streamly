@@ -23,9 +23,8 @@ import (
 )
 
 var (
-
 	selectionValueRE = regexp.MustCompile(`^([12]):(\d+)$`)
-	seasonNumberRE = regexp.MustCompile(`(\d+)`)
+	seasonNumberRE   = regexp.MustCompile(`(\d+)`)
 
 	episodeNumberREs = []*regexp.Regexp{
 
@@ -33,9 +32,7 @@ var (
 		regexp.MustCompile(`(?i)\b\d{1,2}x(\d{1,4})\b`),
 		regexp.MustCompile(`(?i)\bepisode[ ._-]?(\d{1,4})\b`),
 		regexp.MustCompile(`(?i)\be(\d{1,4})\b`),
-
 	}
-
 )
 
 const autocompleteDeadline = 2500 * time.Millisecond
@@ -54,6 +51,34 @@ func (b *Bot) onAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreat
 		respondAutocomplete(s, i, b.sportsGameChoices(strings.TrimSpace(optionString(i, "game"))))
 		return
 
+	case "subscribe":
+
+		if focused := focusedOption(i); focused == "" || focused == "team" {
+
+			respondAutocomplete(s, i, b.subscribeTeamChoices(strings.TrimSpace(optionString(i, "team"))))
+
+		} else {
+
+			respondAutocomplete(s, i, nil)
+
+		}
+
+		return
+
+	case "subscriptions":
+
+		if focused := focusedOption(i); focused == "" || focused == "subscription" {
+
+			respondAutocomplete(s, i, b.subscriptionChoices(i.GuildID, strings.TrimSpace(optionString(i, "subscription"))))
+
+		} else {
+
+			respondAutocomplete(s, i, nil)
+
+		}
+
+		return
+
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), autocompleteDeadline)
@@ -69,7 +94,6 @@ func respondAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate, c
 
 		Type: discordgo.InteractionApplicationCommandAutocompleteResult,
 		Data: &discordgo.InteractionResponseData{Choices: choices},
-
 	})
 
 }
@@ -77,12 +101,10 @@ func respondAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate, c
 func (b *Bot) streamTitleChoices(ctx context.Context, i *discordgo.InteractionCreate, query string) []*discordgo.ApplicationCommandOptionChoice {
 
 	type streamAutocompleteFetch struct {
-
 		tv []tvapi.Channel
 
 		recent []*discordgo.ApplicationCommandOptionChoice
 		search []febapi.SearchResult
-
 	}
 
 	var fetched streamAutocompleteFetch
@@ -152,8 +174,8 @@ func (b *Bot) streamTitleChoices(ctx context.Context, i *discordgo.InteractionCr
 
 	select {
 
-		case <-done: // all fetches completed
-		case <-ctx.Done():
+	case <-done: // all fetches completed
+	case <-ctx.Done():
 
 	}
 
@@ -173,9 +195,8 @@ func (b *Bot) streamTitleChoices(ctx context.Context, i *discordgo.InteractionCr
 
 			choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
 
-				Name: truncate(b.Resolver.TVAutocompleteLabelWithShow(channel), 100),
-				Value: media.TVSelectionValue(channel.DaddyID),
-
+				Name:  truncate(b.Resolver.TVAutocompleteLabelWithShow(channel), 100),
+				Value: media.TVSelectionValue(channel.ID),
 			})
 
 		}
@@ -190,9 +211,8 @@ func (b *Bot) streamTitleChoices(ctx context.Context, i *discordgo.InteractionCr
 
 			choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
 
-				Name: autocompleteLabel(result),
+				Name:  autocompleteLabel(result),
 				Value: fmt.Sprintf("%d:%d", result.BoxType, result.ID),
-
 			})
 
 		}
@@ -227,7 +247,7 @@ func (b *Bot) handleStream(s *discordgo.Session, i *discordgo.InteractionCreate)
 
 		}
 
-		b.startLiveStream(s, i, *live, live.Name, media.TVSelectionValue(live.DaddyID), true)
+		b.startLiveStream(s, i, *live, live.Name, media.TVSelectionValue(live.ID), true)
 		return
 
 	}
@@ -387,121 +407,118 @@ func (b *Bot) handleSelect(s *discordgo.Session, i *discordgo.InteractionCreate,
 
 	switch kind {
 
-		case "season":
+	case "season":
 
-			rawSeason := valueParts[1]
-			season, _ := strconv.Atoi(rawSeason)
+		rawSeason := valueParts[1]
+		season, _ := strconv.Atoi(rawSeason)
 
-			details, err := b.Resolver.Details(media.Selection{ID: id, BoxType: febapi.BoxSeries})
+		details, err := b.Resolver.Details(media.Selection{ID: id, BoxType: febapi.BoxSeries})
 
-			if err != nil {
+		if err != nil {
 
-				details = media.TitleDetails{Title: "Your Selection"}
+			details = media.TitleDetails{Title: "Your Selection"}
+
+		}
+
+		children, err := b.Resolver.ListChildren(shareKey, fid)
+
+		if err != nil {
+
+			editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("No episodes were found in that season.")})
+			return
+
+		}
+
+		episodes := toEpisodes(b.Resolver.Files(children))
+
+		if len(episodes) == 0 {
+
+			editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("No episodes were found in that season.")})
+			return
+
+		}
+
+		if epTitles := b.Resolver.EpisodeList(details.IMDBId, season); epTitles != nil {
+
+			for i := range episodes {
+
+				episodes[i].Title = epTitles[episodes[i].Number]
 
 			}
 
-			children, err := b.Resolver.ListChildren(shareKey, fid)
+		}
 
-			if err != nil {
+		embed := baseEmbed(details, "Select an Episode")
+		components := []discordgo.MessageComponent{episodeRow(id, shareKey, season, episodes)}
 
-				editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("No episodes were found in that season.")})
-				return
+		editMessage(s, i, &discordgo.WebhookEdit{Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}), Components: ptrComponents(components)})
 
-			}
+	case "episode":
 
-			episodes := toEpisodes(b.Resolver.Files(children))
+		if len(parts) < 5 {
 
-			if len(episodes) == 0 {
+			return
 
-				editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr("No episodes were found in that season.")})
-				return
+		}
 
-			}
+		if err := b.Pool.RequireWorker(i.GuildID); err != nil {
+
+			editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr(err.Error())})
+			return
+
+		}
+
+		season, _ := strconv.Atoi(parts[4])
+		episode, _ := strconv.Atoi(valueParts[1])
+
+		details, err := b.Resolver.Details(media.Selection{ID: id, BoxType: febapi.BoxSeries})
+
+		if err != nil {
+
+			details = media.TitleDetails{Title: "Your Selection"}
+
+		}
+
+		epTitle := details.EpisodeTitles[fmt.Sprintf("%d:%d", season, episode)]
+
+		if epTitle == "" {
 
 			if epTitles := b.Resolver.EpisodeList(details.IMDBId, season); epTitles != nil {
 
-				for i := range episodes {
-
-					episodes[i].Title = epTitles[episodes[i].Number]
-
-				}
+				epTitle = epTitles[episode]
 
 			}
 
-			embed := baseEmbed(details, "Select an Episode")
-			components := []discordgo.MessageComponent{episodeRow(id, shareKey, season, episodes)}
+		}
 
-			editMessage(s, i, &discordgo.WebhookEdit{Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}), Components: ptrComponents(components)})
+		videoName := b.Resolver.FileName(shareKey, fid)
 
-		case "episode":
+		autoNext := &pool.AutoNextContext{
 
-			if len(parts) < 5 {
+			ShowID:   id,
+			ShareKey: shareKey,
 
-				return
+			Season:  season,
+			Episode: episode,
 
-			}
+			HistoryValue: fmt.Sprintf("%d:%d", febapi.BoxSeries, id),
 
-			if err := b.Pool.RequireWorker(i.GuildID); err != nil {
+			ChannelID:      i.ChannelID,
+			VoiceChannelID: voiceChannelID(s, i),
+			UserID:         userID(i),
+		}
 
-				editMessage(s, i, &discordgo.WebhookEdit{Content: strPtr(err.Error())})
-				return
-
-			}
-
-			season, _ := strconv.Atoi(parts[4])
-			episode, _ := strconv.Atoi(valueParts[1])
-
-			details, err := b.Resolver.Details(media.Selection{ID: id, BoxType: febapi.BoxSeries})
-
-			if err != nil {
-
-				details = media.TitleDetails{Title: "Your Selection"}
-
-			}
-
-			epTitle := details.EpisodeTitles[fmt.Sprintf("%d:%d", season, episode)]
-
-			if epTitle == "" {
-
-				if epTitles := b.Resolver.EpisodeList(details.IMDBId, season); epTitles != nil {
-
-					epTitle = epTitles[episode]
-
-				}
-
-			}
-
-			videoName := b.Resolver.FileName(shareKey, fid)
-
-			autoNext := &pool.AutoNextContext{
-
-				ShowID: id,
-				ShareKey: shareKey,
-
-				Season: season,
-				Episode: episode,
-
-				HistoryValue: fmt.Sprintf("%d:%d", febapi.BoxSeries, id),
-
-				ChannelID: i.ChannelID,
-				VoiceChannelID: voiceChannelID(s, i),
-				UserID: userID(i),
-
-			}
-
-			b.startStream(s, i, details, shareKey, fid, videoName, &episodeRef{Season: season, Episode: episode, Title: epTitle}, fmt.Sprintf("%d:%d", febapi.BoxSeries, id), autoNext)
+		b.startStream(s, i, details, shareKey, fid, videoName, &episodeRef{Season: season, Episode: episode, Title: epTitle}, fmt.Sprintf("%d:%d", febapi.BoxSeries, id), autoNext)
 
 	}
 
 }
 
 type episodeRef struct {
-
-	Season int
+	Season  int
 	Episode int
 
 	Title string
-
 }
 
 type playFunc func(context.Context, *pool.Session, pool.Request) error
@@ -595,18 +612,18 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 
 	err = play(context.Background(), session, pool.Request{
 
-		GuildID: channel.GuildID,
+		GuildID:   channel.GuildID,
 		ChannelID: channel.ID,
 
-		Caption: caption,
-		InitialURL: url,
+		Caption:      caption,
+		InitialURL:   url,
 		QualityLabel: label,
 
 		Metadata: metadata,
 
-		OnPrepare: b.prepareStream,
+		OnPrepare:     b.prepareStream,
 		OnMediaProbed: b.armIntroOnProbe,
-		OnNearEnd: b.handleNearEnd(s, i, session, embed),
+		OnNearEnd:     b.handleNearEnd(s, i, session, embed),
 
 		ResolveURL: func() (string, error) {
 
@@ -647,7 +664,6 @@ func (b *Bot) startStream(s *discordgo.Session, i *discordgo.InteractionCreate, 
 			closeStreamMessage(s, i, embed, closeLabel(reason))
 
 		},
-
 	})
 
 	if err != nil {
@@ -715,7 +731,7 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 
 	}
 
-	endpoint, err := b.Resolver.TVStreamEndpoint(channel.DaddyID)
+	endpoint, err := b.Resolver.TVStreamEndpoint(channel.ID)
 
 	if err != nil || endpoint.URL == "" {
 
@@ -736,48 +752,42 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 
 	details := media.TVDetails(channel)
 	caption := truncate(channel.Name, 53)
-	daddyID := channel.DaddyID
+	channelID := channel.ID
 
 	tvChannel := channel
 	metadata := &pool.StreamMetadata{
 
-		Live: true,
-		DaddyID: daddyID,
-		Label: "Live",
+		Live:      true,
+		ChannelID: channelID,
+		Label:     "Live",
 
-		Details: details,
+		Details:   details,
 		TVChannel: &tvChannel,
-
 	}
 
 	embed := liveStreamingEmbed(details, channel, voice.ID)
 
 	resolveLive := func() (tvapi.ResolvedStream, error) {
 
-		return b.Resolver.TVStreamEndpoint(metadata.DaddyID)
-
-	}
-
-	resolveFallback := func() (tvapi.ResolvedStream, error) {
-
-		return b.Resolver.TVStreamEndpointFallback(metadata.DaddyID)
+		return b.Resolver.TVStreamEndpoint(metadata.ChannelID)
 
 	}
 
 	err = play(context.Background(), session, pool.Request{
 
-		GuildID: voice.GuildID,
+		GuildID:   voice.GuildID,
 		ChannelID: voice.ID,
 
-		Caption: caption,
+		Caption:    caption,
 		InitialURL: endpoint.URL,
 
 		QualityLabel: "Live",
 
-		Headers: config.TVStreamHeadersForReferer(endpoint.Referer),
-		Live: true,
+		// cdnlivetv playlists are CORS-open; no referer-gated proxy session.
+		Headers: config.TVStreamHeadersForReferer(""),
+		Live:    true,
 
-		Metadata: metadata,
+		Metadata:  metadata,
 		OnPrepare: b.prepareStream,
 
 		ResolveURL: func() (string, error) {
@@ -796,43 +806,7 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 
 		ResolveHeaders: func() map[string]string {
 
-			stream, err := resolveLive()
-
-			if err != nil || stream.Referer == "" {
-
-				return nil
-
-			}
-
-			return config.TVStreamHeadersForReferer(stream.Referer)
-
-		},
-
-		ResolveFallbackURL: func() (string, error) {
-
-			stream, err := resolveFallback()
-
-			if err != nil {
-
-				return "", err
-
-			}
-
-			return stream.URL, nil
-
-		},
-
-		ResolveFallbackHeaders: func() map[string]string {
-
-			stream, err := resolveFallback()
-
-			if err != nil || stream.Referer == "" {
-
-				return nil
-
-			}
-
-			return config.TVStreamHeadersForReferer(stream.Referer)
+			return config.TVStreamHeadersForReferer("")
 
 		},
 
@@ -847,7 +821,6 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 			closeStreamMessage(s, i, embed, closeLabel(reason))
 
 		},
-
 	})
 
 	if err != nil {
@@ -865,7 +838,7 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 
 	webhookEdit := &discordgo.WebhookEdit{
 
-		Embeds: ptrEmbeds([]*discordgo.MessageEmbed{embed}),
+		Embeds:     ptrEmbeds([]*discordgo.MessageEmbed{embed}),
 		Components: ptrComponents(components),
 	}
 
@@ -877,10 +850,9 @@ func (b *Bot) startLiveStream(s *discordgo.Session, i *discordgo.InteractionCrea
 		webhookEdit.Embeds = ptrEmbeds([]*discordgo.MessageEmbed{&streamEmbed})
 		webhookEdit.Files = []*discordgo.File{{
 
-			Name: "channelthumb.png",
+			Name:        "channelthumb.png",
 			ContentType: "image/png",
-			Reader: bytes.NewReader(thumb),
-
+			Reader:      bytes.NewReader(thumb),
 		}}
 
 	}
@@ -1083,6 +1055,22 @@ func optionString(i *discordgo.InteractionCreate, name string) string {
 
 }
 
+func focusedOption(i *discordgo.InteractionCreate) string {
+
+	for _, option := range i.ApplicationCommandData().Options {
+
+		if option.Focused {
+
+			return option.Name
+
+		}
+
+	}
+
+	return ""
+
+}
+
 func autocompleteLabel(result febapi.SearchResult) string {
 
 	kind := "Movie"
@@ -1238,14 +1226,12 @@ func minInt(a, b int) int {
 }
 
 type episode struct {
-
 	FID int
 
-	Number int
+	Number   int
 	FileName string
 
 	Title string
-
 }
 
 func seasonRow(id int, shareKey string, seasons []febapi.FebboxFile) discordgo.ActionsRow {
@@ -1260,7 +1246,6 @@ func seasonRow(id int, shareKey string, seasons []febapi.FebboxFile) discordgo.A
 
 			Label: truncate(info.Label, 100),
 			Value: fmt.Sprintf("%d:%d", season.FID, info.Number),
-
 		})
 
 	}
@@ -1270,8 +1255,7 @@ func seasonRow(id int, shareKey string, seasons []febapi.FebboxFile) discordgo.A
 		CustomID: fmt.Sprintf("stream:season:%d:%s", id, shareKey),
 
 		Placeholder: "Choose a season",
-		Options: options,
-
+		Options:     options,
 	}}}
 
 }
@@ -1294,7 +1278,6 @@ func episodeRow(id int, shareKey string, season int, episodes []episode) discord
 
 			Label: label,
 			Value: fmt.Sprintf("%d:%d", ep.FID, ep.Number),
-
 		})
 
 	}
@@ -1304,17 +1287,14 @@ func episodeRow(id int, shareKey string, season int, episodes []episode) discord
 		CustomID: fmt.Sprintf("stream:episode:%d:%s:%d", id, shareKey, season),
 
 		Placeholder: "Choose an episode",
-		Options: options,
-
+		Options:     options,
 	}}}
 
 }
 
 func seasonInfo(name string, ordinal int) struct {
-
 	Number int
-	Label string
-
+	Label  string
 } {
 
 	if match := seasonNumberRE.FindStringSubmatch(name); len(match) > 1 {
@@ -1322,20 +1302,16 @@ func seasonInfo(name string, ordinal int) struct {
 		number, _ := strconv.Atoi(match[1])
 
 		return struct {
-
 			Number int
-			Label string
-
-		}{ Number: number, Label: fmt.Sprintf("Season %d", number) }
+			Label  string
+		}{Number: number, Label: fmt.Sprintf("Season %d", number)}
 
 	}
 
 	return struct {
-
 		Number int
-		Label string
-
-	}{ Number: ordinal, Label: titleCase(name) }
+		Label  string
+	}{Number: ordinal, Label: titleCase(name)}
 
 }
 

@@ -16,18 +16,16 @@ import (
 )
 
 type Bot struct {
-
-	Session *discordgo.Session
+	Session  *discordgo.Session
 	Resolver *media.Resolver
-	Pool *pool.Pool
-	DB *db.Client
-	IntroDB *introdb.CachedClient
+	Pool     *pool.Pool
+	DB       *db.Client
+	IntroDB  *introdb.CachedClient
 	Captions *captions.Fetcher
 
-	autoNext map[string]*autoNextState
-	autoNextMu sync.Mutex
+	autoNext    map[string]*autoNextState
+	autoNextMu  sync.Mutex
 	autoNextGen uint64
-
 }
 
 func New(resolver *media.Resolver, p *pool.Pool, database *db.Client) (*Bot, error) {
@@ -49,11 +47,11 @@ func New(resolver *media.Resolver, p *pool.Pool, database *db.Client) (*Bot, err
 
 	bot := &Bot{
 
-		Session: session,
+		Session:  session,
 		Resolver: resolver,
-		Pool: p,
-		DB: database,
-		IntroDB: introdb.NewCachedClient(introdb.NewClient(introdb.ClientOptions{APIKey: config.App.IntroDBAPIKey})),
+		Pool:     p,
+		DB:       database,
+		IntroDB:  introdb.NewCachedClient(introdb.NewClient(introdb.ClientOptions{APIKey: config.App.IntroDBAPIKey})),
 		Captions: captions.NewFetcher(febapi.NewFebboxClient(febapi.FebboxOptions{Cookie: config.App.FebboxCookie}), subtitleProviders, config.FebboxStreamHeaders()),
 
 		autoNext: make(map[string]*autoNextState),
@@ -76,6 +74,7 @@ func (b *Bot) Start() error {
 	log.Printf("[startup] logged in as %s.", b.Session.State.User.Username)
 
 	b.Resolver.Warmup()
+	b.StartSubscriptionLoop()
 
 	return b.registerCommands()
 
@@ -88,7 +87,6 @@ func (b *Bot) registerCommands() error {
 		{Name: "stream", Description: "Stream a movie, TV show, or live TV channel in your call.", Options: []*discordgo.ApplicationCommandOption{
 
 			{Type: discordgo.ApplicationCommandOptionString, Name: "title", Description: "Search by movie name, show name, or TV channel.", Required: true, Autocomplete: true},
-
 		}},
 
 		{Name: "pause", Description: "Pause the active stream in your call."},
@@ -97,7 +95,6 @@ func (b *Bot) registerCommands() error {
 		{Name: "seek", Description: "Jump to a position in the active stream.", Options: []*discordgo.ApplicationCommandOption{
 
 			{Type: discordgo.ApplicationCommandOptionString, Name: "position", Description: "Enter a time to jump to (eg: 4:20 or +30).", Required: true, Autocomplete: true},
-
 		}},
 
 		{Name: "skip-intro", Description: "Skip past the intro in the active stream."},
@@ -108,9 +105,7 @@ func (b *Bot) registerCommands() error {
 
 				{Name: "Enabled", Value: subtitleModeEnabled},
 				{Name: "Disabled", Value: subtitleModeDisabled},
-
 			}},
-
 		}},
 
 		{Name: "stop", Description: "Stop the active stream in your call."},
@@ -119,18 +114,32 @@ func (b *Bot) registerCommands() error {
 
 		{Name: "sports", Description: "Find a live sports game and stream it in your call.", Options: []*discordgo.ApplicationCommandOption{
 
-			{Type: discordgo.ApplicationCommandOptionString, Name: "game", Description: "Search live games by league or matchup.", Required: true, Autocomplete: true},
-
+			{Type: discordgo.ApplicationCommandOptionString, Name: "game", Description: "Search games by league, team, or matchup.", Required: true, Autocomplete: true},
 		}},
+
+		{Name: "subscribe", Description: "Auto-stream a team's games when they start.", Options: []*discordgo.ApplicationCommandOption{
+
+			{Type: discordgo.ApplicationCommandOptionString, Name: "team", Description: "Team to watch (eg: New York Mets).", Required: true, Autocomplete: true},
+			{Type: discordgo.ApplicationCommandOptionChannel, Name: "voice_channel", Description: "Voice channel the bot should join.", Required: true, ChannelTypes: []discordgo.ChannelType{discordgo.ChannelTypeGuildVoice}},
+			{Type: discordgo.ApplicationCommandOptionChannel, Name: "text_channel", Description: "Text channel for the now-playing message.", Required: true, ChannelTypes: []discordgo.ChannelType{discordgo.ChannelTypeGuildText, discordgo.ChannelTypeGuildNews}},
+		}},
+
+		{Name: "subscriptions", Description: "Manage this server's team game subscriptions.", Options: []*discordgo.ApplicationCommandOption{
+
+			{Type: discordgo.ApplicationCommandOptionString, Name: "subscription", Description: "Pick a subscription to manage.", Required: true, Autocomplete: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "action", Description: "What to do with that subscription.", Required: true, Choices: []*discordgo.ApplicationCommandOptionChoice{
+
+				{Name: "Delete", Value: "delete"},
+			}},
+		}},
+
 		{Name: "top", Description: "See trending movies and TV shows to watch."},
 		{Name: "now", Description: "See what is streaming in this server."},
 
 		{Name: "configure", Description: "Configure server streaming.", Options: []*discordgo.ApplicationCommandOption{
 
 			{Type: discordgo.ApplicationCommandOptionString, Name: "key", Description: "The server key.", Required: true},
-
 		}},
-
 	}
 
 	guildID := config.App.GuildID
@@ -218,6 +227,14 @@ func (b *Bot) onCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	case "sports":
 
 		b.handleSports(s, i)
+
+	case "subscribe":
+
+		b.handleSubscribe(s, i)
+
+	case "subscriptions":
+
+		b.handleSubscriptions(s, i)
 
 	case "top":
 
@@ -309,7 +326,6 @@ func respondEphemeral(s *discordgo.Session, i *discordgo.InteractionCreate, cont
 
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{Content: content, Flags: discordgo.MessageFlagsEphemeral},
-
 	})
 
 }
@@ -320,7 +336,6 @@ func respondEmbed(s *discordgo.Session, i *discordgo.InteractionCreate, embed *d
 
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{Embeds: []*discordgo.MessageEmbed{embed}},
-
 	})
 
 }
